@@ -1,6 +1,6 @@
 # Story 2.2: Add Texts & Document Insertion
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -36,27 +36,27 @@ so that my documents are embedded, stored in VastDB, and available for similarit
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Replace `add_texts` stub with real implementation (AC: #1, #2, #3)**
-  - [ ] In `src/langchain_vastdb/vectorstores.py`, replace the `add_texts` stub (currently raises `NotImplementedError`) with the real template method.
-  - [ ] Add new imports needed: `import json`, `import uuid`, `import pyarrow as pa`. Add `Sequence` to the typing imports if not already present.
-  - [ ] Implementation: materialize `texts` to a list (it arrives as `Iterable[str]`), call `self._embedding.embed_documents(texts_list)` to get embeddings, generate UUIDs via `[str(uuid.uuid4()) for _ in texts_list]` if no `ids` provided, default `metadatas` to `[{} for _ in texts_list]` if `None`, then call `return self._insert_vectors(texts_list, vectors, metadatas, ids)`.
-  - [ ] Preserve the exact existing signature: `add_texts(self, texts: Iterable[str], metadatas: list[dict] | None = None, *, ids: list[str] | None = None, **kwargs: Any) -> list[str]`.
+- [x] **Task 1: Replace `add_texts` stub with real implementation (AC: #1, #2, #3)**
+  - [x] In `src/langchain_vastdb/vectorstores.py`, replace the `add_texts` stub (currently raises `NotImplementedError`) with the real template method.
+  - [x] Add new imports needed: `import json`, `import uuid`, `import pyarrow as pa`. Add `Sequence` to the typing imports if not already present.
+  - [x] Implementation: materialize `texts` to a list (it arrives as `Iterable[str]`), call `self._embedding.embed_documents(texts_list)` to get embeddings, generate UUIDs via `[str(uuid.uuid4()) for _ in texts_list]` if no `ids` provided, default `metadatas` to `[{} for _ in texts_list]` if `None`, then call `return self._insert_vectors(texts_list, vectors, metadatas, ids)`.
+  - [x] Preserve the exact existing signature: `add_texts(self, texts: Iterable[str], metadatas: list[dict] | None = None, *, ids: list[str] | None = None, **kwargs: Any) -> list[str]`.
 
-- [ ] **Task 2: Implement `_insert_vectors` hook with default VastDB SDK logic (AC: #4, #5)**
-  - [ ] Add the `_insert_vectors` method with the **exact canonical signature** from architecture.md: `_insert_vectors(self, texts: list[str], embeddings: list[list[float]], metadatas: list[dict], ids: list[str], *, tx: Transaction | None = None) -> list[str]`.
-  - [ ] Follow the transaction pattern exactly: if `tx` is provided, use it; otherwise open `with self._session.transaction() as new_tx:`. Use `self._get_table(tx_var)` for table access.
-  - [ ] Build a `pa.RecordBatch` with 4 columns using the configured column names (`self._id_column`, `self._text_column`, `self._vector_column`, `self._metadata_column`).
-  - [ ] Column data: IDs as `pa.array(ids, type=pa.utf8())`, texts as `pa.array(texts, type=pa.utf8())`, vectors as `pa.array(embeddings, type=pa.list_(pa.float32()))`, metadata as `pa.array([json.dumps(m) for m in metadatas], type=pa.utf8())`.
-  - [ ] Call `table.insert(batch)` and return `ids`.
+- [x] **Task 2: Implement `_insert_vectors` hook with default VastDB SDK logic (AC: #4, #5)**
+  - [x] Add the `_insert_vectors` method with the **exact canonical signature** from architecture.md: `_insert_vectors(self, texts: list[str], embeddings: list[list[float]], metadatas: list[dict], ids: list[str], *, tx: Transaction | None = None) -> list[str]`.
+  - [x] Follow the transaction pattern exactly: if `tx` is provided, use it; otherwise open `with self._session.transaction() as new_tx:`. Use `self._get_table(tx_var)` for table access.
+  - [x] Build a `pa.RecordBatch` with 4 columns using the configured column names (`self._id_column`, `self._text_column`, `self._vector_column`, `self._metadata_column`).
+  - [x] Column data: IDs as `pa.array(ids, type=pa.utf8())`, texts as `pa.array(texts, type=pa.utf8())`, vectors as `pa.array(embeddings, type=pa.list_(pa.float32()))`, metadata as `pa.array([json.dumps(m) for m in metadatas], type=pa.utf8())`.
+  - [x] Call `table.insert(batch)` and return `ids`.
 
-- [ ] **Task 3: Add Google-style docstrings with type hints (AC: all)**
-  - [ ] Add docstring to `add_texts` explaining the template method pattern: embeds texts, generates IDs, and delegates to `_insert_vectors`.
-  - [ ] Add docstring to `_insert_vectors` explaining this is the hook method for subclass customization, the transaction pattern, and the PyArrow batch construction.
+- [x] **Task 3: Add Google-style docstrings with type hints (AC: all)**
+  - [x] Add docstring to `add_texts` explaining the template method pattern: embeds texts, generates IDs, and delegates to `_insert_vectors`.
+  - [x] Add docstring to `_insert_vectors` explaining this is the hook method for subclass customization, the transaction pattern, and the PyArrow batch construction.
 
-- [ ] **Task 4: Validate (AC: all)**
-  - [ ] Run `uv run ruff check .` -- must pass with zero warnings.
-  - [ ] Run `uv run python -c "from langchain_vastdb import VastDBVectorStore"` -- must still succeed.
-  - [ ] Run `uv run pytest tests/unit_tests/ -v` -- must not error.
+- [x] **Task 4: Validate (AC: all)**
+  - [x] Run `uv run ruff check .` -- must pass with zero warnings.
+  - [x] Run `uv run python -c "from langchain_vastdb import VastDBVectorStore"` -- must still succeed.
+  - [x] Run `uv run pytest tests/unit_tests/ -v` -- must not error.
 
 ## Dev Notes
 
@@ -260,8 +260,22 @@ No automated tests to write (Story 2.5). Validations:
 
 ### Agent Model Used
 
+claude-opus-4.6
+
 ### Debug Log References
+
+None -- clean implementation, no debugging required.
 
 ### Completion Notes List
 
+- All 4 tasks completed in a single pass with no errors.
+- `add_texts` template method: materializes Iterable to list, embeds via `embed_documents`, generates UUID4 IDs if none provided, defaults metadatas to empty dicts, delegates to `_insert_vectors`.
+- `_insert_vectors` hook: builds `pa.RecordBatch.from_pydict()` with configured column names, follows exact transaction pattern (uses provided `tx` or opens new one), calls `table.insert(batch)`.
+- Metadata serialized as JSON strings via `json.dumps()`.
+- No try/catch -- SDK exceptions propagate per architecture decision.
+- `uv run ruff check .` passed with zero warnings.
+- Import succeeds, pytest runs cleanly (0 tests collected, as expected for Story 2.2).
+
 ### File List
+
+- `src/langchain_vastdb/vectorstores.py` -- MODIFIED: replaced add_texts stub with real implementation, added _insert_vectors hook, added imports (json, uuid, pyarrow).
