@@ -13,3 +13,19 @@ stages:
   - test
   - integration-test
   - publish
+
+# -- Lint job: ruff check on a single Python version --
+lint:
+  stage: lint
+  image: ghcr.io/astral-sh/uv:${UV_VERSION}-python${PYTHON_VERSION}-${BASE_LAYER}
+  cache:
+    - key:
+        files:
+          - uv.lock
+      paths:
+        - ${UV_CACHE_DIR}
+  script:
+    - uv sync --locked
+    - uv run ruff check .
+  after_script:
+    - uv cache prune --ci
