@@ -1,6 +1,6 @@
 # Story 1.2: Configure GitLab CI/CD Pipeline
 
-Status: in-progress
+Status: review
 
 ## Story
 
@@ -27,43 +27,43 @@ so that every merge request is validated automatically and releases are publishe
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Replace `.gitlab-ci.yml` with project-specific pipeline (AC: #1, #2, #3, #4)**
-  - [ ] Read the existing `.gitlab-ci.yml` (it is an Auto-DevOps placeholder with no project-specific logic) and **replace it entirely** with a custom pipeline.
-  - [ ] Define four stages: `lint`, `test`, `integration-test`, `publish`.
-  - [ ] Use the official uv Docker image `ghcr.io/astral-sh/uv:$UV_VERSION-python$PYTHON_VERSION-$BASE_LAYER` as the base image for all jobs. Pin `UV_VERSION` to a recent stable version (e.g., `0.7` or later). Use `trixie-slim` or `bookworm-slim` as the base layer.
-  - [ ] Configure uv caching: set `UV_CACHE_DIR: .uv-cache`, cache it between runs keyed on `uv.lock`, and prune with `uv cache prune --ci` in `after_script`.
-  - [ ] Set `UV_LINK_MODE: copy` as a global variable (required for Docker environments).
+- [x] **Task 1: Replace `.gitlab-ci.yml` with project-specific pipeline (AC: #1, #2, #3, #4)**
+  - [x] Read the existing `.gitlab-ci.yml` (it is an Auto-DevOps placeholder with no project-specific logic) and **replace it entirely** with a custom pipeline.
+  - [x] Define four stages: `lint`, `test`, `integration-test`, `publish`.
+  - [x] Use the official uv Docker image `ghcr.io/astral-sh/uv:$UV_VERSION-python$PYTHON_VERSION-$BASE_LAYER` as the base image for all jobs. Pin `UV_VERSION` to a recent stable version (e.g., `0.7` or later). Use `trixie-slim` or `bookworm-slim` as the base layer.
+  - [x] Configure uv caching: set `UV_CACHE_DIR: .uv-cache`, cache it between runs keyed on `uv.lock`, and prune with `uv cache prune --ci` in `after_script`.
+  - [x] Set `UV_LINK_MODE: copy` as a global variable (required for Docker environments).
 
-- [ ] **Task 2: Implement lint job (AC: #1)**
-  - [ ] Create a `lint` job in the `lint` stage.
-  - [ ] Script: `uv sync --locked` then `uv run ruff check .`.
-  - [ ] Use a single Python version (3.12 is fine for linting).
+- [x] **Task 2: Implement lint job (AC: #1)**
+  - [x] Create a `lint` job in the `lint` stage.
+  - [x] Script: `uv sync --locked` then `uv run ruff check .`.
+  - [x] Use a single Python version (3.12 is fine for linting).
 
-- [ ] **Task 3: Implement unit-test job with Python matrix (AC: #1, #4)**
-  - [ ] Create a `unit-test` job in the `test` stage.
-  - [ ] Use `parallel:matrix` to run against Python 3.10, 3.11, 3.12, and 3.13.
-  - [ ] Override the `PYTHON_VERSION` variable per matrix entry and use the corresponding uv Docker image.
-  - [ ] Script: `uv sync --locked` then `uv run pytest tests/unit_tests/ -v`.
-  - [ ] This job has no cluster dependency -- it uses mocked VastDB SDK.
+- [x] **Task 3: Implement unit-test job with Python matrix (AC: #1, #4)**
+  - [x] Create a `unit-test` job in the `test` stage.
+  - [x] Use `parallel:matrix` to run against Python 3.10, 3.11, 3.12, and 3.13.
+  - [x] Override the `PYTHON_VERSION` variable per matrix entry and use the corresponding uv Docker image.
+  - [x] Script: `uv sync --locked` then `uv run pytest tests/unit_tests/ -v`.
+  - [x] This job has no cluster dependency -- it uses mocked VastDB SDK.
 
-- [ ] **Task 4: Implement integration-test job (AC: #1, #2)**
-  - [ ] Create an `integration-test` job in the `integration-test` stage.
-  - [ ] Use a single Python version (3.12).
-  - [ ] Script: `uv sync --locked` then `uv run pytest tests/integration_tests/ -v`.
-  - [ ] Require CI/CD variables to be set at the project level in GitLab: `VASTDB_ENDPOINT`, `VASTDB_ACCESS_KEY`, `VASTDB_SECRET_KEY`, `VASTDB_TEST_BUCKET`, `VASTDB_TEST_SCHEMA`. These are read by the test fixtures at runtime (Story 3.1 will implement the test fixtures).
-  - [ ] The job should be configured to **allow failure** (`allow_failure: true`) until Story 3.1 implements the integration tests -- otherwise the pipeline will block on an empty test directory. Add a `# TODO: remove allow_failure after Story 3.1` comment.
+- [x] **Task 4: Implement integration-test job (AC: #1, #2)**
+  - [x] Create an `integration-test` job in the `integration-test` stage.
+  - [x] Use a single Python version (3.12).
+  - [x] Script: `uv sync --locked` then `uv run pytest tests/integration_tests/ -v`.
+  - [x] Require CI/CD variables to be set at the project level in GitLab: `VASTDB_ENDPOINT`, `VASTDB_ACCESS_KEY`, `VASTDB_SECRET_KEY`, `VASTDB_TEST_BUCKET`, `VASTDB_TEST_SCHEMA`. These are read by the test fixtures at runtime (Story 3.1 will implement the test fixtures).
+  - [x] The job should be configured to **allow failure** (`allow_failure: true`) until Story 3.1 implements the integration tests -- otherwise the pipeline will block on an empty test directory. Add a `# TODO: remove allow_failure after Story 3.1` comment.
 
-- [ ] **Task 5: Implement publish job with Trusted Publishing (AC: #3)**
-  - [ ] Create a `publish` job in the `publish` stage.
-  - [ ] Run only on tag pushes matching `v*` pattern (e.g., `v0.1.0`): use `rules: - if: $CI_COMMIT_TAG =~ /^v/`.
-  - [ ] Configure `id_tokens` section with `PYPI_ID_TOKEN` using `aud: pypi` for PyPI OIDC Trusted Publishing.
-  - [ ] Script: `uv build` then `uv publish --token $PYPI_ID_TOKEN`.
-  - [ ] Add a comment noting that the project must be registered as a trusted publisher on PyPI, linked to the GitLab project path, before the first publish will work.
+- [x] **Task 5: Implement publish job with Trusted Publishing (AC: #3)**
+  - [x] Create a `publish` job in the `publish` stage.
+  - [x] Run only on tag pushes matching `v*` pattern (e.g., `v0.1.0`): use `rules: - if: $CI_COMMIT_TAG =~ /^v/`.
+  - [x] Configure `id_tokens` section with `PYPI_ID_TOKEN` using `aud: pypi` for PyPI OIDC Trusted Publishing.
+  - [x] Script: `uv build` then `uv publish --token $PYPI_ID_TOKEN`.
+  - [x] Add a comment noting that the project must be registered as a trusted publisher on PyPI, linked to the GitLab project path, before the first publish will work.
 
-- [ ] **Task 6: Validate pipeline locally (AC: #5, #6)**
-  - [ ] Run `uv run ruff check .` to confirm zero warnings (no regressions from editing `.gitlab-ci.yml`).
-  - [ ] Run `uv run python -c "from langchain_vastdb import VastDBVectorStore; print(VastDBVectorStore)"` to confirm the import smoke test still passes.
-  - [ ] Review the `.gitlab-ci.yml` visually for YAML syntax correctness (proper indentation, no tabs, valid GitLab CI syntax).
+- [x] **Task 6: Validate pipeline locally (AC: #5, #6)**
+  - [x] Run `uv run ruff check .` to confirm zero warnings (no regressions from editing `.gitlab-ci.yml`).
+  - [x] Run `uv run python -c "from langchain_vastdb import VastDBVectorStore; print(VastDBVectorStore)"` to confirm the import smoke test still passes.
+  - [x] Review the `.gitlab-ci.yml` visually for YAML syntax correctness (proper indentation, no tabs, valid GitLab CI syntax).
 
 ## Dev Notes
 
@@ -275,10 +275,22 @@ No structural changes to the rest of the project. All other files remain as Stor
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+Claude Opus 4 (claude-opus-4.6)
 
 ### Debug Log References
 
+No debug issues encountered.
+
 ### Completion Notes List
 
+- Replaced Auto-DevOps placeholder `.gitlab-ci.yml` with a custom 4-stage pipeline (lint, test, integration-test, publish).
+- Lint job runs `ruff check .` on Python 3.12 with uv Docker image and cache.
+- Unit-test job uses `parallel:matrix` to test Python 3.10, 3.11, 3.12, 3.13.
+- Integration-test job targets VAST cluster with `allow_failure: true` (pending Story 3.1).
+- Publish job uses PyPI Trusted Publishing via OIDC `id_tokens` on version tags (`v*`).
+- All jobs use `uv sync --locked`, `UV_LINK_MODE: copy`, and cache pruning in `after_script`.
+- Validation: `ruff check .` passes with zero warnings, import smoke test passes.
+
 ### File List
+
+- `.gitlab-ci.yml` (replaced)
