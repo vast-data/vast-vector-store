@@ -36,7 +36,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-09
-last_updated: 2026-04-09  # 1-2 → review
+last_updated: 2026-04-09  # 1-2 → done
 project: vast-vector-store
 project_key: NOKEY
 tracking_system: file-system
@@ -46,7 +46,7 @@ development_status:
   # Epic 1: Project Bootstrap & Package Foundation
   epic-1: in-progress
   1-1-initialize-package-scaffold-with-uv-and-hatchling: done
-  1-2-configure-gitlab-ci-cd-pipeline: review
+  1-2-configure-gitlab-ci-cd-pipeline: done
   epic-1-retrospective: optional
 
   # Epic 2: VastDBVectorStore Core Implementation

@@ -1,6 +1,6 @@
 # Story 1.2: Configure GitLab CI/CD Pipeline
 
-Status: review
+Status: done
 
 ## Story
 
@@ -294,3 +294,9 @@ No debug issues encountered.
 ### File List
 
 - `.gitlab-ci.yml` (replaced)
+
+### Review Findings
+
+- [x] [Review][Patch] Cache key collision across Python version matrix [.gitlab-ci.yml:39-45] — unit-test parallel matrix jobs share cache key based only on uv.lock; should include PYTHON_VERSION prefix to prevent cross-version cache contamination
+- [x] [Review][Defer] No workflow:rules directive to prevent duplicate pipelines [.gitlab-ci.yml:top-level] — deferred, pre-existing
+- [x] [Review][Defer] Test stages also run on tag pushes [.gitlab-ci.yml:lint,unit-test,integration-test] — deferred: autonomous yolo run — requires human judgment, deferred for review
