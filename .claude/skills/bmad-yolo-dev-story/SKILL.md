@@ -7,9 +7,9 @@ description: "Autonomously develops next BMAD story end-to-end. Use when the use
 
 ## Overview
 
-Develops a BMAD story end-to-end without human intervention. Chains `bmad-create-story` → git branch → `bmad-dev-story` → `bmad-code-review` (loop) → optional `bmad-agent-tech-writer` → push → MR/PR → CI wait + fix loop, in a single command.
+Develops a BMAD story end-to-end without human intervention. Chains `bmad-create-story` → git branch → `bmad-dev-story` → `bmad-code-review` (loop) → optional `bmad-agent-tech-writer` → push → MR/PR → CI wait + fix loop, all in a **single main-context turn**.
 
-**Each stage runs in a fresh `general-purpose` subagent.** Verbose execution stays out of main context — only a ≤200-word structured summary returns per stage. Subagents commit their own work in granular `code:` / `bmad:` / `docs:` commits as they go (not at stage boundaries). Subagents halt and escalate when they hit a problem they can't solve autonomously.
+**Every stage runs inline in the main context.** No `Agent` / subagent spawns. The orchestrator invokes each BMAD skill directly via the `Skill` tool (or by following its `SKILL.md` inline) and performs git/gh/glab operations via `Bash`. The entire workflow is one user turn → one premium request on metered backends (e.g., Copilot-proxied Claude Code).
 
 **Args:** `[story-id-or-path]` (optional — auto-discovers next backlog story if omitted), `--max-iters N` (default `3`; applies to both review-fix loop and CI-fix loop independently), `--no-tech-writer`, `--no-push`, `--no-ci-wait`, `--remote-host github|gitlab` (escape hatch when auto-detection is ambiguous).
 
@@ -26,35 +26,60 @@ Develops a BMAD story end-to-end without human intervention. Chains `bmad-create
    - On the project's default branch (usually `main`) OR current branch is a `story/*` branch matching a resume scenario. Otherwise halt.
    - **Detect remote host FIRST**, then verify only the matching CLI tool. Detection rules in `references/push-pr-ci.md` under "Remote detection" — apply them in order. Cache the result in the run log so later stages don't re-detect. If `--remote-host` was passed, skip detection and use that value verbatim. Then verify the matching tool (`gh auth status` for github, `glab auth status` for gitlab) succeeds. **Do not run `gh auth status` unless detection said github.** Skip this entire check if `--no-push` is set.
 
-5. **Load `references/orchestration.md`** for the stage sequence, run log format, resume logic, and escalation rules. Route to per-stage references (`references/subagent-prompts.md`, `references/push-pr-ci.md`) on demand.
+5. **Load `references/orchestration.md`** for the stage sequence, run log format, resume logic, and escalation rules. Route to per-stage references (`references/stage-prompts.md`, `references/push-pr-ci.md`) on demand.
 
 ## Stages (high level — full details in `references/orchestration.md`)
 
-| # | Stage | Runs in | Returns |
+| # | Stage | Runs as | Returns |
 |---|-------|---------|---------|
-| 1 | Create story (`bmad-create-story`) | subagent | story key + file path |
-| 2 | Branch (`story/<key>` from default) | inline | branch name |
-| 3 | Dev story (`bmad-dev-story`) | subagent | files modified, status |
-| 4 | Review-fix loop (`bmad-code-review` ↔ `bmad-dev-story`, max `max_iters`) | subagent per call | iterations, final status |
-| 5 | Tech writer (`bmad-agent-tech-writer`) — conditional on user-facing changes | subagent | docs updated or skipped |
-| 6 | Push + open MR/PR (auto-detect `gh`/`glab`) | inline | remote ref + PR url |
-| 7 | CI wait + fix loop (skip if no active CI; max `max_iters` fix passes) | inline + subagent on failure | CI status |
+| 1 | Create story (`bmad-create-story`) | inline skill invocation | story key + file path written to run log |
+| 2 | Branch (`story/<key>` from default) | inline bash | branch name written to run log |
+| 3 | Dev story (`bmad-dev-story`) | inline skill invocation | files modified, status written to run log |
+| 4 | Review-fix loop (`bmad-code-review` ↔ `bmad-dev-story`, max `max_iters`) | inline per iteration | iterations, final status written to run log |
+| 5 | Tech writer (`bmad-agent-tech-writer`) — conditional on user-facing changes | inline skill invocation | docs updated or skipped |
+| 6 | Push + open MR/PR (auto-detect `gh`/`glab`) | inline bash | remote ref + PR url |
+| 7 | CI wait + fix loop (skip if no active CI; max `max_iters` fix passes) | inline bash + inline dev-story invocation on failure | CI status |
 | 8 | Final report | inline | full run summary |
 
 ## Critical principles
 
-- **Subagents own their work.** Each subagent invoked by this skill receives explicit instructions to (a) run the named BMAD skill, (b) commit incrementally as it completes logical chunks, (c) halt and escalate if it can't proceed autonomously, (d) return a ≤200-word structured summary. The exact prompt templates are in `references/subagent-prompts.md` — use them verbatim with placeholder substitution.
+- **Single-turn inline execution.** The entire workflow runs in one main-context turn. Never call the `Agent` tool. Invoke nested BMAD skills inline via the `Skill` tool — their instructions inject into *this* turn, they do not spawn a sub-turn. This is what keeps the workflow to 1 premium request on metered backends.
 
-- **Commit discipline (enforced inside every subagent).** Three families, never mixed in one commit:
+- **The run log on disk is the only trusted state.** Context accumulates across the whole run. The harness may auto-evict old tool results or auto-compact prior messages under pressure — that is expected and acceptable. Every stage, before it starts, must **re-read** `{implementation_artifacts}/yolo-runs/<story-key>.run.md` to recover the current stage, branch, story key, iteration counters, and remote host. Do not rely on scrollback or in-conversation memory of prior stages. If you need a stage's verbose details (a diff, a review finding, a CI log), re-read the file it was written to. The run log and the files it points to are authoritative; the conversation is not.
+
+- **File-handling discipline keeps context small.** Because every stage shares one context, each stage must be frugal with tokens:
+  - `Grep` before `Read`. Never `Read` a whole file "for reference" — find the span you need, then `Read` with `offset`/`limit`.
+  - `Edit` not `Write`. Diffs are cheap, full-file rewrites are not.
+  - Review findings go straight to the story file (the BMAD `bmad-code-review` skill already does this). The orchestrator reads back only the `Status:` line and the unchecked follow-up tasks — never the full findings block.
+  - CI failure logs pipe to a temp file, then `Grep` for the failing assertion. Never inline a whole log into context.
+  - Large intermediate artifacts (diffs, logs, findings) always land on disk first and are `Grep`/`Read`-sliced back in only as needed.
+
+- **Compaction directive — preserve anchors, drop everything else.** If the harness's auto-compaction fires mid-run (because context pressure hit the threshold), the summarization pass should retain ONLY these anchors and drop everything else, because everything else can be re-derived from disk:
+
+  **Preserve:**
+  - The active story key, branch name, default branch, remote host.
+  - The path to `{implementation_artifacts}/yolo-runs/<story-key>.run.md` (the run log).
+  - The current stage name and iteration counters (`review_iters_used`, `ci_iters_used`).
+  - The path to the story file.
+  - The PR/MR URL if stage 6 completed.
+  - This skill's critical principles (so the resumed flow still follows them).
+
+  **Drop:**
+  - All tool outputs from prior stages (file contents, diffs, grep results, CI logs).
+  - All narration/reasoning from prior stages.
+  - The full text of earlier stage-prompt blocks — they can be re-read from `references/stage-prompts.md` if the next stage needs them.
+  - Anything that can be re-obtained by re-reading a file on disk.
+
+  After compaction, the next stage re-reads the run log to recover state and proceeds. This is not a failure mode — it is the designed behavior.
+
+- **Commit discipline — incremental, granular, family-separated.** Three families, never mixed in one commit:
   - `code: <story-key>: <imperative summary>` — anything under repo source/tests/configs/build files
   - `bmad: <story-key>: <imperative summary>` — anything under `_bmad-output/**` (story file, sprint-status.yaml, deferred-work.md, run logs)
   - `docs: <story-key>: <imperative summary>` — anything under `{project_knowledge}/**` or root README/CHANGELOG
   - One commit per logical change, not one commit per stage. Use HEREDOC commit messages. Never `--amend`. Never `--no-verify`. Never `git add -A`/`git add .`.
 
-- **Subagents halt on unsolvable problems.** Their summary must include `status: blocked` and a clear description of the problem. The orchestrator marks the run failed, writes the reason to the run log, reports to the user, and stops — it does NOT retry blindly or paper over the issue.
+- **Halt on unsolvable problems — do not guess, do not loop.** If a stage cannot proceed autonomously (ambiguous requirement, persistent test failure, missing dependency, rejected push), stop immediately, mark the run log `status: blocked` with a clear `failure_reason`, report to the user, and exit the workflow. Do NOT retry blindly or paper over the issue. Specific halt/escalation rules are in `references/stage-prompts.md` per stage.
 
-- **YOLO overrides are explicit, not implicit.** Each stage's subagent prompt (in `references/subagent-prompts.md`) names every BMAD-skill halt point and dictates the autonomous default. Without these overrides, BMAD skills will hang waiting for input that will never come.
+- **YOLO overrides at BMAD skill halt points.** BMAD skills are designed for an interactive human and contain explicit `HALT` / `<ask>` instructions at decision points. When invoking a BMAD skill inline, the orchestrator must know the autonomous default for every known halt and pick it without pause. The exact overrides for each stage are in `references/stage-prompts.md` — read the relevant section before invoking the skill for that stage.
 
-- **Run log is the recovery oracle.** Every stage transition writes to `{implementation_artifacts}/yolo-runs/<story-key>.run.md`. If main context compacts mid-run, the next turn re-reads this file to determine the next stage. Treat the log as authoritative state.
-
-- **Never push broken work.** If any stage returns `status: blocked` or `status: failed`, stop. Do not advance to push, PR, or CI stages.
+- **Never push broken work.** If any stage produces `status: blocked` or `status: failed`, stop. Do not advance to push, PR, or CI stages.
