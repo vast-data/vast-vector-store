@@ -1,26 +1,98 @@
-# You can override the included template(s) by including variable overrides
-# SAST customization: https://docs.gitlab.com/ee/user/application_security/sast/#customizing-the-sast-settings
-# Secret Detection customization: https://docs.gitlab.com/ee/user/application_security/secret_detection/#customizing-settings
-# Dependency Scanning customization: https://docs.gitlab.com/ee/user/application_security/dependency_scanning/#customizing-the-dependency-scanning-settings
-# Container Scanning customization: https://docs.gitlab.com/ee/user/application_security/container_scanning/#customizing-the-container-scanning-settings
-# Note that environment variables can be set in several places
-# See https://docs.gitlab.com/ee/ci/variables/#cicd-variable-precedence
+# GitLab CI/CD Pipeline for langchain-vastdb
+# Stages: lint, test (Python matrix), integration-test, publish (PyPI)
+
+variables:
+  UV_VERSION: "0.7"
+  PYTHON_VERSION: "3.12"
+  BASE_LAYER: "bookworm-slim"
+  UV_CACHE_DIR: ".uv-cache"
+  UV_LINK_MODE: "copy"
+
 stages:
-- build
-- test
-- deploy
-- review
-- dast
-- staging
-- canary
-- production
-- incremental rollout 10%
-- incremental rollout 25%
-- incremental rollout 50%
-- incremental rollout 100%
-- performance
-- cleanup
-sast:
+  - lint
+  - test
+  - integration-test
+  - publish
+
+# -- Lint job: ruff check on a single Python version --
+lint:
+  stage: lint
+  image: ghcr.io/astral-sh/uv:${UV_VERSION}-python${PYTHON_VERSION}-${BASE_LAYER}
+  tags:
+    - vast-dev-builder
+  cache:
+    - key:
+        files:
+          - uv.lock
+      paths:
+        - ${UV_CACHE_DIR}
+  script:
+    - uv sync --locked
+    - uv run ruff check .
+  after_script:
+    - uv cache prune --ci
+
+# -- Unit tests: Python version matrix --
+unit-test:
   stage: test
-include:
-- template: Auto-DevOps.gitlab-ci.yml
+  image: ghcr.io/astral-sh/uv:${UV_VERSION}-python${PYTHON_VERSION}-${BASE_LAYER}
+  tags:
+    - vast-dev-builder
+  parallel:
+    matrix:
+      - PYTHON_VERSION: ["3.10", "3.11", "3.12", "3.13"]
+  cache:
+    - key:
+        prefix: py${PYTHON_VERSION}
+        files:
+          - uv.lock
+      paths:
+        - ${UV_CACHE_DIR}
+  # TODO: remove allow_failure after Story 2.5 adds unit tests
+  allow_failure: true
+  script:
+    - uv sync --locked
+    - uv run pytest tests/unit_tests/ -v
+  after_script:
+    - uv cache prune --ci
+
+# -- Integration tests: real VAST cluster --
+integration-test:
+  stage: integration-test
+  image: ghcr.io/astral-sh/uv:${UV_VERSION}-python${PYTHON_VERSION}-${BASE_LAYER}
+  tags:
+    - vast-dev-builder
+  # TODO: remove allow_failure after Story 3.1 implements integration tests
+  allow_failure: true
+  cache:
+    - key:
+        files:
+          - uv.lock
+      paths:
+        - ${UV_CACHE_DIR}
+  script:
+    - uv sync --locked
+    - uv run pytest tests/integration_tests/ -v
+  after_script:
+    - uv cache prune --ci
+  # These variables must be set at the GitLab project level:
+  # VASTDB_ENDPOINT, VASTDB_ACCESS_KEY, VASTDB_SECRET_KEY,
+  # VASTDB_TEST_BUCKET, VASTDB_TEST_SCHEMA
+
+# -- Publish to PyPI: only on version tags --
+# NOTE: Before first publish, register this project as a trusted publisher
+# on PyPI at https://pypi.org/manage/account/publishing/
+# Link it to this GitLab project's path, environment, and tag pattern.
+publish:
+  stage: publish
+  image: ghcr.io/astral-sh/uv:${UV_VERSION}-python${PYTHON_VERSION}-${BASE_LAYER}
+  tags:
+    - vast-dev-builder
+  id_tokens:
+    PYPI_ID_TOKEN:
+      aud: pypi
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+  script:
+    - uv build
+    - uv publish --token $PYPI_ID_TOKEN
