@@ -1,6 +1,65 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
-name = "vast-vector-store"
-version = "0.1.0"
-description = "Add your description here"
-requires-python = ">=3.13"
-dependencies = []
+name = "langchain-vastdb"
+version = "0.0.1"
+description = "LangChain VectorStore integration for VAST Database"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "VAST Data" },
+]
+keywords = ["langchain", "vastdb", "vector-store", "vector-database", "rag"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "langchain-core>=0.3,<2",
+    "vastdb>=2.0.3",
+]
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "pytest",
+    "pytest-asyncio",
+    "langchain-tests>=1.1,<2",
+]
+
+[tool.hatch.build]
+exclude = [
+    "_bmad/",
+    "_bmad-output/",
+    ".claude/",
+    ".cursor/",
+    ".opencode/",
+    ".github/",
+    ".gitlab-ci.yml",
+    ".idea/",
+    "docs/",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/langchain_vastdb"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = [".claude", ".cursor", ".opencode", ".github", "_bmad", "_bmad-output", "docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

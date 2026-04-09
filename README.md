@@ -15,14 +15,14 @@ Already a pro? Just edit this README.md and make it your own. Want to make it ea
 
 ```
 cd existing_repo
-git remote add origin https://git.vastdata.com/genai/vast-vector-store.git
+git remote add origin <your-repo-url>
 git branch -M main
 git push -uf origin main
 ```
 
 ## Integrate with your tools
 
-- [ ] [Set up project integrations](https://git.vastdata.com/genai/vast-vector-store/-/settings/integrations)
+- [ ] [Set up project integrations](https://docs.gitlab.com/ee/user/project/integrations/)
 
 ## Collaborate with your team
 
