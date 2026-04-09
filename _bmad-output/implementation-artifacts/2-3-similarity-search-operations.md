@@ -1,6 +1,6 @@
 # Story 2.3: Similarity Search Operations
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -45,48 +45,48 @@ so that I can find relevant documents in my vector store using different search 
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Replace `similarity_search` stub with real template method (AC: #1, #4)**
-  - [ ] In `src/langchain_vastdb/vectorstores.py`, replace the `similarity_search` stub (currently raises `NotImplementedError` at line ~248-261) with the real template method.
-  - [ ] Add `import ibis` to imports (third-party block, after `import pyarrow as pa`).
-  - [ ] Implementation: embed query via `self._embedding.embed_query(query)`, extract `filter` from `**kwargs` via `kwargs.get("filter")`, convert filter dict to ibis predicate if present (see Dev Notes), call `self._vector_search(query_vector, k, predicate=predicate)`, convert results to Documents via `[self._row_to_document(row) for row, _ in results]`, return the list.
-  - [ ] Preserve the existing signature: `similarity_search(self, query: str, k: int = 4, **kwargs: Any) -> list[Document]`.
+- [x] **Task 1: Replace `similarity_search` stub with real template method (AC: #1, #4)**
+  - [x] In `src/langchain_vastdb/vectorstores.py`, replace the `similarity_search` stub (currently raises `NotImplementedError` at line ~248-261) with the real template method.
+  - [x] Add `import ibis` to imports (third-party block, after `import pyarrow as pa`).
+  - [x] Implementation: embed query via `self._embedding.embed_query(query)`, extract `filter` from `**kwargs` via `kwargs.get("filter")`, convert filter dict to ibis predicate if present (see Dev Notes), call `self._vector_search(query_vector, k, predicate=predicate)`, convert results to Documents via `[self._row_to_document(row) for row, _ in results]`, return the list.
+  - [x] Preserve the existing signature: `similarity_search(self, query: str, k: int = 4, **kwargs: Any) -> list[Document]`.
 
-- [ ] **Task 2: Implement `similarity_search_with_score` template method (AC: #2, #4)**
-  - [ ] Add `similarity_search_with_score` method after `similarity_search`.
-  - [ ] Signature: `similarity_search_with_score(self, query: str, k: int = 4, **kwargs: Any) -> list[tuple[Document, float]]`.
-  - [ ] Implementation: same as `similarity_search` (embed query, convert filter, call `_vector_search`), but return `[(self._row_to_document(row, score), score) for row, score in results]`.
+- [x] **Task 2: Implement `similarity_search_with_score` template method (AC: #2, #4)**
+  - [x] Add `similarity_search_with_score` method after `similarity_search`.
+  - [x] Signature: `similarity_search_with_score(self, query: str, k: int = 4, **kwargs: Any) -> list[tuple[Document, float]]`.
+  - [x] Implementation: same as `similarity_search` (embed query, convert filter, call `_vector_search`), but return `[(self._row_to_document(row, score), score) for row, score in results]`.
 
-- [ ] **Task 3: Implement `similarity_search_by_vector` template method (AC: #3, #4)**
-  - [ ] Add `similarity_search_by_vector` method after `similarity_search_with_score`.
-  - [ ] Signature: `similarity_search_by_vector(self, embedding: list[float], k: int = 4, **kwargs: Any) -> list[Document]`.
-  - [ ] Implementation: skip embedding step, extract `filter` from `**kwargs`, convert filter to ibis predicate, call `self._vector_search(embedding, k, predicate=predicate)`, return `[self._row_to_document(row) for row, _ in results]`.
+- [x] **Task 3: Implement `similarity_search_by_vector` template method (AC: #3, #4)**
+  - [x] Add `similarity_search_by_vector` method after `similarity_search_with_score`.
+  - [x] Signature: `similarity_search_by_vector(self, embedding: list[float], k: int = 4, **kwargs: Any) -> list[Document]`.
+  - [x] Implementation: skip embedding step, extract `filter` from `**kwargs`, convert filter to ibis predicate, call `self._vector_search(embedding, k, predicate=predicate)`, return `[self._row_to_document(row) for row, _ in results]`.
 
-- [ ] **Task 4: Implement `_build_predicate` helper for filter dict to ibis conversion (AC: #4)**
-  - [ ] Add a private method `_build_predicate(self, filter_dict: dict | None) -> ibis.Expr | None` that converts a LangChain filter dict to an ibis predicate expression.
-  - [ ] Implementation: if `filter_dict` is `None` or empty, return `None`. For each key-value pair, create `ibis._[key] == value` using ibis deferred column expressions. Combine multiple predicates with `&` (logical AND). Return the combined predicate.
-  - [ ] This is a private helper, not a hook -- subclasses that need custom filter logic override the entire template method or use typed metadata columns.
+- [x] **Task 4: Implement `_build_predicate` helper for filter dict to ibis conversion (AC: #4)**
+  - [x] Add a private method `_build_predicate(self, filter_dict: dict | None) -> ibis.Expr | None` that converts a LangChain filter dict to an ibis predicate expression.
+  - [x] Implementation: if `filter_dict` is `None` or empty, return `None`. For each key-value pair, create `ibis._[key] == value` using ibis deferred column expressions. Combine multiple predicates with `&` (logical AND). Return the combined predicate.
+  - [x] This is a private helper, not a hook -- subclasses that need custom filter logic override the entire template method or use typed metadata columns.
 
-- [ ] **Task 5: Implement `_vector_search` hook with default VastDB SDK logic (AC: #5, #7)**
-  - [ ] Add the `_vector_search` method with the **exact canonical signature**: `_vector_search(self, query_vector: list[float], k: int, predicate: ibis.Expr | None = None, *, tx: Transaction | None = None) -> list[tuple[dict, float]]`.
-  - [ ] Follow the transaction pattern exactly: if `tx` is provided, use it; otherwise open `with self._session.transaction() as new_tx:`. Use `self._get_table(tx_var)` for table access.
-  - [ ] Call `table.vector_search(vec=query_vector, columns=[self._id_column, self._text_column, self._metadata_column], limit=k, predicate=predicate)` to get a `RecordBatchReader`.
-  - [ ] Convert results: `reader.read_all().to_pylist()` to get a list of dicts.
-  - [ ] VastDB SDK returns a `$distance` column with the distance score. Extract it from each row dict: `score = row.pop("$distance", 0.0)`.
-  - [ ] Return `[(row, score) for row in rows]` after extracting the distance.
+- [x] **Task 5: Implement `_vector_search` hook with default VastDB SDK logic (AC: #5, #7)**
+  - [x] Add the `_vector_search` method with the **exact canonical signature**: `_vector_search(self, query_vector: list[float], k: int, predicate: ibis.Expr | None = None, *, tx: Transaction | None = None) -> list[tuple[dict, float]]`.
+  - [x] Follow the transaction pattern exactly: if `tx` is provided, use it; otherwise open `with self._session.transaction() as new_tx:`. Use `self._get_table(tx_var)` for table access.
+  - [x] Call `table.vector_search(vec=query_vector, columns=[self._id_column, self._text_column, self._metadata_column], limit=k, predicate=predicate)` to get a `RecordBatchReader`.
+  - [x] Convert results: `reader.read_all().to_pylist()` to get a list of dicts.
+  - [x] VastDB SDK returns a `$distance` column with the distance score. Extract it from each row dict: `score = row.pop("$distance", 0.0)`.
+  - [x] Return `[(row, score) for row in rows]` after extracting the distance.
 
-- [ ] **Task 6: Implement `_row_to_document` hook (AC: #6, #7)**
-  - [ ] Add the `_row_to_document` method with the **exact canonical signature**: `_row_to_document(self, row: dict, score: float | None = None) -> Document`.
-  - [ ] Implementation: extract `page_content = row.get(self._text_column, "")`, deserialize metadata via `metadata = json.loads(row.get(self._metadata_column, "{}"))`, return `Document(page_content=page_content, metadata=metadata)`.
-  - [ ] Note: `_row_to_document` has NO `tx` parameter -- it's pure data conversion, no DB access.
+- [x] **Task 6: Implement `_row_to_document` hook (AC: #6, #7)**
+  - [x] Add the `_row_to_document` method with the **exact canonical signature**: `_row_to_document(self, row: dict, score: float | None = None) -> Document`.
+  - [x] Implementation: extract `page_content = row.get(self._text_column, "")`, deserialize metadata via `metadata = json.loads(row.get(self._metadata_column, "{}"))`, return `Document(page_content=page_content, metadata=metadata)`.
+  - [x] Note: `_row_to_document` has NO `tx` parameter -- it's pure data conversion, no DB access.
 
-- [ ] **Task 7: Add Google-style docstrings with type hints (AC: all)**
-  - [ ] Add docstrings to all new methods: `similarity_search`, `similarity_search_with_score`, `similarity_search_by_vector`, `_build_predicate`, `_vector_search`, `_row_to_document`.
-  - [ ] Use Google-style format (Args, Returns).
+- [x] **Task 7: Add Google-style docstrings with type hints (AC: all)**
+  - [x] Add docstrings to all new methods: `similarity_search`, `similarity_search_with_score`, `similarity_search_by_vector`, `_build_predicate`, `_vector_search`, `_row_to_document`.
+  - [x] Use Google-style format (Args, Returns).
 
-- [ ] **Task 8: Validate (AC: all)**
-  - [ ] Run `uv run ruff check .` -- must pass with zero warnings.
-  - [ ] Run `uv run python -c "from langchain_vastdb import VastDBVectorStore"` -- must succeed.
-  - [ ] Run `uv run pytest tests/unit_tests/ -v` -- must not error.
+- [x] **Task 8: Validate (AC: all)**
+  - [x] Run `uv run ruff check .` -- must pass with zero warnings.
+  - [x] Run `uv run python -c "from langchain_vastdb import VastDBVectorStore"` -- must succeed.
+  - [x] Run `uv run pytest tests/unit_tests/ -v` -- must not error.
 
 ## Dev Notes
 
@@ -307,8 +307,31 @@ No automated tests to write (Story 2.5). Validations:
 
 ### Agent Model Used
 
+claude-opus-4.6
+
 ### Debug Log References
+
+None -- clean implementation, no debugging required.
 
 ### Completion Notes List
 
+- All 8 tasks completed in a single pass with no errors.
+- `similarity_search` template method: embeds query via `embed_query`, converts filter to ibis predicate via `_build_predicate`, delegates to `_vector_search`, converts rows via `_row_to_document`.
+- `similarity_search_with_score`: same flow, returns `list[tuple[Document, float]]` with distance scores.
+- `similarity_search_by_vector`: skips embedding step, passes pre-computed vector directly.
+- `_build_predicate` helper: converts `{"key": "value"}` dicts to `ibis._[key] == value` predicates combined with `&`.
+- `_vector_search` hook: follows exact transaction pattern, calls `table.vector_search(vec, columns, limit, predicate)`, extracts `$distance` score from each row.
+- `_row_to_document` hook: extracts text from configured column, deserializes JSON metadata via `json.loads`, returns `Document`.
+- Added `_do_vector_search` private helper to avoid code duplication in the transaction branches.
+- No try/catch -- SDK exceptions propagate per architecture decision.
+- `uv run ruff check .` passed with zero warnings.
+- Import succeeds, pytest runs cleanly (0 tests collected, as expected -- tests are Story 2.5).
+
 ### File List
+
+- `src/langchain_vastdb/vectorstores.py` -- MODIFIED: replaced similarity_search stub with real implementation, added similarity_search_with_score, similarity_search_by_vector, _build_predicate, _vector_search, _do_vector_search, _row_to_document. Added `import ibis`. Updated class docstring.
+
+## Change Log
+
+- 2026-04-09: Story 2.3 created by create-story workflow -- comprehensive developer guide for similarity search operations.
+- 2026-04-09: All 8 tasks implemented in a single pass. similarity_search, similarity_search_with_score, similarity_search_by_vector template methods, _vector_search and _row_to_document hooks, _build_predicate helper. Status set to review.
