@@ -11,7 +11,7 @@ Develops a BMAD story end-to-end without human intervention. Chains `bmad-create
 
 **Each stage runs in a fresh `general-purpose` subagent.** Verbose execution stays out of main context — only a ≤200-word structured summary returns per stage. Subagents commit their own work in granular `code:` / `bmad:` / `docs:` commits as they go (not at stage boundaries). Subagents halt and escalate when they hit a problem they can't solve autonomously.
 
-**Args:** `[story-id-or-path]` (optional — auto-discovers next backlog story if omitted), `--max-iters N` (default `3`; applies to both review-fix loop and CI-fix loop independently), `--no-tech-writer`, `--no-push`, `--no-ci-wait`.
+**Args:** `[story-id-or-path]` (optional — auto-discovers next backlog story if omitted), `--max-iters N` (default `3`; applies to both review-fix loop and CI-fix loop independently), `--no-tech-writer`, `--no-push`, `--no-ci-wait`, `--remote-host github|gitlab` (escape hatch when auto-detection is ambiguous).
 
 ## On Activation
 
@@ -24,7 +24,7 @@ Develops a BMAD story end-to-end without human intervention. Chains `bmad-create
 4. **Verify pre-conditions** (fail fast, do NOT just barrel through):
    - Working tree clean (`git status --porcelain` empty). If dirty, halt with a clear message. Do not stash or discard.
    - On the project's default branch (usually `main`) OR current branch is a `story/*` branch matching a resume scenario. Otherwise halt.
-   - `gh` or `glab` available and authenticated for the detected remote (only required if `--no-push` is not set).
+   - **Detect remote host FIRST**, then verify only the matching CLI tool. Detection rules in `references/push-pr-ci.md` under "Remote detection" — apply them in order. Cache the result in the run log so later stages don't re-detect. If `--remote-host` was passed, skip detection and use that value verbatim. Then verify the matching tool (`gh auth status` for github, `glab auth status` for gitlab) succeeds. **Do not run `gh auth status` unless detection said github.** Skip this entire check if `--no-push` is set.
 
 5. **Load `references/orchestration.md`** for the stage sequence, run log format, resume logic, and escalation rules. Route to per-stage references (`references/subagent-prompts.md`, `references/push-pr-ci.md`) on demand.
 

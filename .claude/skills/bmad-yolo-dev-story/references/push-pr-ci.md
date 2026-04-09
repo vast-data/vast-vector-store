@@ -9,25 +9,40 @@ These stages run **inline** (the orchestrator executes them directly), with one 
 
 ## Remote detection
 
-```bash
-git remote get-url origin
-```
+**Detection runs in pre-conditions (stage 0) — not at stage 6.** The result is cached in the run log so later stages and resume don't re-detect.
 
-Parse the host:
+If the user passed `--remote-host github` or `--remote-host gitlab`, use it verbatim and skip detection entirely.
 
-| Host pattern                 | Tool   | Notes                                              |
-| ---------------------------- | ------ | -------------------------------------------------- |
-| `github.com`                 | `gh`   | Both HTTPS and SSH URLs                            |
-| Contains `gitlab` (any host) | `glab` | Self-hosted GitLab too — match the substring       |
-| Anything else                | —      | Halt with `unsupported remote host: <host>`        |
+Otherwise apply these signals **in order** and stop at the first match:
 
-Verify the chosen tool is installed and authenticated:
-- `gh auth status` (must succeed)
-- `glab auth status` (must succeed)
+1. **Repo CI config files (highest priority — most reliable for self-hosted).**
+   - `.gitlab-ci.yml` exists at the repo root → `gitlab`
+   - `.github/workflows/` directory exists with at least one `*.yml`/`*.yaml` file → `github`
+   - If both exist → ambiguous; halt and ask the user to pass `--remote-host`.
 
-If the tool is missing or unauthenticated, halt with a clear message — do not try to install or authenticate from inside the workflow.
+2. **Remote URL host string.** Run `git remote get-url origin` and parse the host:
+   - Host == `github.com` (with or without `www.`) → `github`
+   - Host contains the substring `gitlab` (e.g. `gitlab.com`, `gitlab.example.org`) → `gitlab`
 
-Cache the detected `remote_host` in the run log front matter so resume works without re-detecting.
+3. **Last-resort tool probe.** Run both in parallel:
+   - `glab repo view 2>/dev/null` (succeeds if the remote is a glab-known host)
+   - `gh repo view 2>/dev/null` (succeeds if the remote is github)
+   - Exactly one succeeds → that's the host. Both fail → unknown host. Both succeed → ambiguous (rare).
+
+4. **Unknown.** Halt with a clear message: `Could not auto-detect remote host for <url>. Re-run with --remote-host github|gitlab to specify explicitly.` Do NOT default to either tool — guessing wrong wastes a stage and corrupts the run log.
+
+**Verify only the matching CLI tool**, then cache:
+
+| Detected | Verification command | Cache as |
+| -------- | -------------------- | -------- |
+| `github` | `gh auth status`     | `remote_host: github` |
+| `gitlab` | `glab auth status`   | `remote_host: gitlab` |
+
+If the matching tool is missing or unauthenticated, halt with a clear message — do not try to install or authenticate from inside the workflow, and do not fall back to the other tool. **Never run `gh auth status` if detection said gitlab, or vice versa.**
+
+### Self-hosted GitLab
+
+This is the common case that breaks naive host-string matching (e.g. `git.vastdata.com`, `gitlab.internal.example`, etc.). Rule 1 (`.gitlab-ci.yml` presence) handles it. If a project has neither a `.gitlab-ci.yml` nor a `.github/workflows/` directory and the remote host string doesn't match either pattern, the user must pass `--remote-host` — there's no reliable signal left.
 
 ## Push (stage 6, part 1)
 
