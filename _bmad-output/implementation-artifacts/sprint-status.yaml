@@ -36,7 +36,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-09
-last_updated: 2026-04-09  # 2-1 → ready-for-dev, epic-2 → in-progress
+last_updated: 2026-04-09  # 2-1 → done (code review passed)
 project: vast-vector-store
 project_key: NOKEY
 tracking_system: file-system
@@ -51,7 +51,7 @@ development_status:
 
   # Epic 2: VastDBVectorStore Core Implementation
   epic-2: in-progress
-  2-1-constructor-session-management-and-table-access: ready-for-dev
+  2-1-constructor-session-management-and-table-access: done
   2-2-add-texts-and-document-insertion: backlog
   2-3-similarity-search-operations: backlog
   2-4-delete-get-by-ids-and-factory-method: backlog

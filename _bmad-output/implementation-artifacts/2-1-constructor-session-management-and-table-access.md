@@ -1,6 +1,6 @@
 # Story 2.1: Constructor, Session Management & Table Access
 
-Status: review
+Status: done
 
 ## Story
 
@@ -340,6 +340,11 @@ None -- clean implementation, no debugging required.
 
 - `src/langchain_vastdb/vectorstores.py` -- MODIFIED: stub class replaced with full constructor, session management, table access, and abstract method stubs.
 
+### Review Findings
+
+- [x] [Review][Defer] Thread-safety: `_metadata_loaded` flag has no synchronization [src/langchain_vastdb/vectorstores.py:89] -- deferred, pre-existing design consideration; VastDB SDK is sync-only and `load()` is idempotent, only relevant if future async support adds concurrency.
+
 ## Change Log
 
 - 2026-04-09: Story 2.1 created by create-story workflow -- comprehensive developer guide for constructor, session management, and table access implementation.
+- 2026-04-09: Code review iteration 1 -- clean review, 0 decision-needed, 0 patch, 1 defer, 2 dismissed. Status set to done.
