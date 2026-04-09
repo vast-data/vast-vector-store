@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import uuid
 from typing import TYPE_CHECKING, Any
 
+import pyarrow as pa
 import vastdb
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
@@ -178,12 +181,69 @@ class VastDBVectorStore(VectorStore):
     ) -> list[str]:
         """Add texts to the vector store.
 
-        Placeholder stub -- full implementation lands in Story 2.2.
+        Embeds the provided texts using the configured embedding model,
+        then delegates storage to the ``_insert_vectors`` hook.
 
-        Raises:
-            NotImplementedError: Always, until Story 2.2 is implemented.
+        Args:
+            texts: Texts to add to the store.
+            metadatas: Optional metadata dicts, one per text.
+                Defaults to empty dicts if not provided.
+            ids: Optional document IDs. Auto-generated UUIDs if not provided.
+            **kwargs: Additional keyword arguments (unused by default).
+
+        Returns:
+            List of IDs for the added texts.
         """
-        raise NotImplementedError("add_texts is implemented in Story 2.2")
+        texts_list = list(texts)
+        vectors = self._embedding.embed_documents(texts_list)
+        if ids is None:
+            ids = [str(uuid.uuid4()) for _ in texts_list]
+        if metadatas is None:
+            metadatas = [{} for _ in texts_list]
+        return self._insert_vectors(texts_list, vectors, metadatas, ids)
+
+    def _insert_vectors(
+        self,
+        texts: list[str],
+        embeddings: list[list[float]],
+        metadatas: list[dict],
+        ids: list[str],
+        *,
+        tx: Transaction | None = None,
+    ) -> list[str]:
+        """Insert vectors into VastDB.
+
+        Default hook implementation that builds a PyArrow RecordBatch
+        and inserts it into the configured table. Subclasses can override
+        this to customize insertion behavior (e.g., typed metadata columns).
+
+        Args:
+            texts: The original text strings.
+            embeddings: Embedding vectors, one per text.
+            metadatas: Metadata dicts, one per text.
+            ids: Document IDs, one per text.
+            tx: Optional transaction for reuse by subclasses.
+
+        Returns:
+            The list of document IDs that were inserted.
+        """
+        batch = pa.RecordBatch.from_pydict(
+            {
+                self._id_column: ids,
+                self._text_column: texts,
+                self._vector_column: embeddings,
+                self._metadata_column: [json.dumps(m) for m in metadatas],
+            }
+        )
+        if tx is not None:
+            table = self._get_table(tx)
+            table.insert(batch)
+            return ids
+
+        with self._session.transaction() as new_tx:
+            table = self._get_table(new_tx)
+            table.insert(batch)
+            return ids
 
     def similarity_search(
         self,
