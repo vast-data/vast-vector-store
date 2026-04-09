@@ -39,6 +39,7 @@ unit-test:
       - PYTHON_VERSION: ["3.10", "3.11", "3.12", "3.13"]
   cache:
     - key:
+        prefix: py${PYTHON_VERSION}
         files:
           - uv.lock
       paths:
