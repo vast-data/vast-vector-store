@@ -1,6 +1,6 @@
 # Story 2.3: Similarity Search Operations
 
-Status: review
+Status: done
 
 ## Story
 
@@ -331,7 +331,12 @@ None -- clean implementation, no debugging required.
 
 - `src/langchain_vastdb/vectorstores.py` -- MODIFIED: replaced similarity_search stub with real implementation, added similarity_search_with_score, similarity_search_by_vector, _build_predicate, _vector_search, _do_vector_search, _row_to_document. Added `import ibis`. Updated class docstring.
 
+### Review Findings
+
+- [x] [Review][Defer] Metadata None safety in _row_to_document: if a row has None for metadata column (e.g., inserted externally), json.loads(None) raises TypeError [src/langchain_vastdb/vectorstores.py:_row_to_document] -- deferred, base class _insert_vectors always writes json.dumps({}); will be validated in integration tests (Story 3.1).
+
 ## Change Log
 
 - 2026-04-09: Story 2.3 created by create-story workflow -- comprehensive developer guide for similarity search operations.
 - 2026-04-09: All 8 tasks implemented in a single pass. similarity_search, similarity_search_with_score, similarity_search_by_vector template methods, _vector_search and _row_to_document hooks, _build_predicate helper. Status set to review.
+- 2026-04-09: Code review iteration 1 -- clean review, 0 decision-needed, 0 patch, 1 defer, 0 dismissed. Status set to done.

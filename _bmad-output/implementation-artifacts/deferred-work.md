@@ -20,3 +20,7 @@
 ## Deferred from: code review of story 2-2-add-texts-and-document-insertion (2026-04-09)
 
 - Float64 inference in RecordBatch: `pa.RecordBatch.from_pydict()` infers float64 for Python float lists in the vector column; VastDB table schema likely uses float32. VastDB SDK handles type coercion on insert. Will be validated in integration tests (Story 3.1).
+
+## Deferred from: code review of story 2-3-similarity-search-operations (2026-04-09)
+
+- Metadata None safety in `_row_to_document`: if a row has `None` for the metadata column (e.g., inserted by subclass or external tool), `json.loads(None)` raises TypeError. Base class `_insert_vectors` always writes `json.dumps({})`, so this only affects externally-inserted data. Will be validated in integration tests (Story 3.1).
