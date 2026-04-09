@@ -69,3 +69,19 @@ integration-test:
   # These variables must be set at the GitLab project level:
   # VASTDB_ENDPOINT, VASTDB_ACCESS_KEY, VASTDB_SECRET_KEY,
   # VASTDB_TEST_BUCKET, VASTDB_TEST_SCHEMA
+
+# -- Publish to PyPI: only on version tags --
+# NOTE: Before first publish, register this project as a trusted publisher
+# on PyPI at https://pypi.org/manage/account/publishing/
+# Link it to this GitLab project's path, environment, and tag pattern.
+publish:
+  stage: publish
+  image: ghcr.io/astral-sh/uv:${UV_VERSION}-python${PYTHON_VERSION}-${BASE_LAYER}
+  id_tokens:
+    PYPI_ID_TOKEN:
+      aud: pypi
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+  script:
+    - uv build
+    - uv publish --token $PYPI_ID_TOKEN
