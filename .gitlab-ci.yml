@@ -48,3 +48,24 @@ unit-test:
     - uv run pytest tests/unit_tests/ -v
   after_script:
     - uv cache prune --ci
+
+# -- Integration tests: real VAST cluster --
+integration-test:
+  stage: integration-test
+  image: ghcr.io/astral-sh/uv:${UV_VERSION}-python${PYTHON_VERSION}-${BASE_LAYER}
+  # TODO: remove allow_failure after Story 3.1 implements integration tests
+  allow_failure: true
+  cache:
+    - key:
+        files:
+          - uv.lock
+      paths:
+        - ${UV_CACHE_DIR}
+  script:
+    - uv sync --locked
+    - uv run pytest tests/integration_tests/ -v
+  after_script:
+    - uv cache prune --ci
+  # These variables must be set at the GitLab project level:
+  # VASTDB_ENDPOINT, VASTDB_ACCESS_KEY, VASTDB_SECRET_KEY,
+  # VASTDB_TEST_BUCKET, VASTDB_TEST_SCHEMA
