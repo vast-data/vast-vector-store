@@ -115,12 +115,10 @@ langchain-vastdb/
 ├── pyproject.toml
 ├── README.md
 ├── LICENSE                      # Apache-2.0
-└── .github/
-    └── workflows/
-        ├── ci.yml               # Lint + unit tests on PR
-        ├── integration.yml      # Integration tests (manual/nightly)
-        └── release.yml          # PyPI Trusted Publishing
+└── .gitlab-ci.yml               # Lint + unit tests + integration tests + publish
 ```
+
+> **Note:** Although `uv init --lib` generates a `.github/workflows/` directory by default, this project uses **GitLab CI/CD** (see CI/CD Decision below). Delete the generated `.github/` directory and use `.gitlab-ci.yml` instead.
 
 **Development Experience:**
 `uv` handles virtualenv creation, dependency resolution, lockfile generation, and build/publish — single tool for the entire development lifecycle.

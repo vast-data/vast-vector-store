@@ -285,6 +285,8 @@ So that my documents are embedded, stored in VastDB, and available for similarit
 **When** a subclass overrides it
 **Then** the signature matches exactly: `_insert_vectors(self, texts, embeddings, metadatas, ids, *, tx=None) -> list[str]`
 
+> **Error handling note:** VastDB SDK exceptions propagate as-is per Architecture Decision: Error Handling. No try/catch needed in `add_texts` or `_insert_vectors`; meaningful contextual messages are only added at init boundaries (e.g., table-not-found).
+
 ### Story 2.3: Similarity Search Operations
 
 As a developer,
@@ -324,6 +326,8 @@ So that I can find relevant documents in my vector store using different search 
 **Then** `_vector_search` matches: `_vector_search(self, query_vector, k, predicate=None, *, tx=None) -> list[tuple[dict, float]]`
 **And** `_row_to_document` matches: `_row_to_document(self, row, score=None) -> Document`
 
+> **Error handling note:** VastDB SDK exceptions propagate as-is per Architecture Decision: Error Handling. No try/catch needed in `similarity_search` or `_vector_search`; meaningful contextual messages are only added at init boundaries.
+
 ### Story 2.4: Delete, Get by IDs & Factory Method
 
 As a developer,
@@ -356,6 +360,8 @@ So that I have complete CRUD operations and a convenient factory method.
 **When** a subclass overrides them
 **Then** `_delete_by_ids` matches: `_delete_by_ids(self, ids, *, tx=None) -> bool`
 **And** `_get_by_ids` matches: `_get_by_ids(self, ids, *, tx=None) -> list[dict]`
+
+> **Error handling note:** VastDB SDK exceptions propagate as-is per Architecture Decision: Error Handling. No try/catch needed in `delete` or `get_by_ids`; meaningful contextual messages are only added at init boundaries.
 
 ### Story 2.5: Unit Tests for VastDBVectorStore
 
