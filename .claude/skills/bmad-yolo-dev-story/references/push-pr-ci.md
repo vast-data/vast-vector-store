@@ -5,7 +5,7 @@ description: Remote detection, push, MR/PR creation (gh or glab), CI wait with s
 
 # Push, PR/MR, CI
 
-These stages run **inline** (the orchestrator executes them directly), with one exception: when CI fails, the fix is delegated to a subagent via the `ci-fix` template in `subagent-prompts.md`.
+These stages run **inline** in the main-context turn, like every other stage of `bmad-yolo-dev-story`. When CI fails, the fix is also handled inline — the orchestrator follows the `ci-fix` directives in `references/stage-prompts.md` and invokes `bmad-dev-story` (review-continuation mode) or `bmad-quick-dev` via the `Skill` tool directly.
 
 ## Remote detection
 
@@ -182,17 +182,13 @@ Advance to stage 8.
 
    GitLab: `glab ci trace <job-id>` for each failed job.
 
-2. **Spawn the `ci-fix` subagent** using the template in `references/subagent-prompts.md`. Pass:
-   - `story_file`, `story_key`, `branch`
-   - `iter` (current ci_iters_used + 1)
-   - `max_iters`
-   - `failure_log` (the truncated text)
+2. **Invoke the fix inline** per the `ci-fix` directives in `references/stage-prompts.md`. Decide the fix path (story-code fix via `bmad-dev-story` in review-continuation mode; CI-config fix via `bmad-quick-dev`; or a direct obvious one-liner fix without invoking any BMAD skill). Invoke the chosen skill via the `Skill` tool. Pass through: `story_file`, `story_key`, `branch`, `iter` (current `ci_iters_used + 1`), `max_iters`, and the temp-file path to the captured `failure_log`.
 
-3. **The subagent commits and pushes** its fix. (This is the only stage where a subagent pushes — because the loop polls CI on the new commit.)
+3. **Commit and push the fix inline.** (Stage 7 is the one exception where the orchestrator pushes mid-workflow — because the loop polls CI on the new commit.)
 
-4. **On subagent return:**
-   - `status: blocked` → halt the workflow, surface the blocker. Do not loop further.
-   - `status: done` → re-enter the CI watch (a new CI run will have started from the push).
+4. **On completion:**
+   - Blocked → halt the workflow, surface the blocker. Do not loop further.
+   - Done → re-enter the CI watch (a new CI run will have started from the push).
 
 5. **Increment `ci_iters_used`.** If it would exceed `max_iters` (default 3), halt with `status: failed`, including the latest failure log in the report. Do not loop forever.
 
