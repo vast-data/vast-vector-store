@@ -18,6 +18,8 @@ stages:
 lint:
   stage: lint
   image: ghcr.io/astral-sh/uv:${UV_VERSION}-python${PYTHON_VERSION}-${BASE_LAYER}
+  tags:
+    - vast-dev-builder
   cache:
     - key:
         files:
@@ -34,6 +36,8 @@ lint:
 unit-test:
   stage: test
   image: ghcr.io/astral-sh/uv:${UV_VERSION}-python${PYTHON_VERSION}-${BASE_LAYER}
+  tags:
+    - vast-dev-builder
   parallel:
     matrix:
       - PYTHON_VERSION: ["3.10", "3.11", "3.12", "3.13"]
@@ -54,6 +58,8 @@ unit-test:
 integration-test:
   stage: integration-test
   image: ghcr.io/astral-sh/uv:${UV_VERSION}-python${PYTHON_VERSION}-${BASE_LAYER}
+  tags:
+    - vast-dev-builder
   # TODO: remove allow_failure after Story 3.1 implements integration tests
   allow_failure: true
   cache:
@@ -78,6 +84,8 @@ integration-test:
 publish:
   stage: publish
   image: ghcr.io/astral-sh/uv:${UV_VERSION}-python${PYTHON_VERSION}-${BASE_LAYER}
+  tags:
+    - vast-dev-builder
   id_tokens:
     PYPI_ID_TOKEN:
       aud: pypi
