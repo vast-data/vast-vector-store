@@ -1,6 +1,6 @@
 # Story 1.2: Configure GitLab CI/CD Pipeline
 
-Status: ready-for-dev
+Status: in-progress
 
 ## Story
 
