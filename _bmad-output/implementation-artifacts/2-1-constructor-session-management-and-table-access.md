@@ -1,6 +1,6 @@
 # Story 2.1: Constructor, Session Management & Table Access
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -44,43 +44,43 @@ so that I can connect to my VAST cluster and the store is ready for operations.
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Replace the stub class with the full constructor (AC: #1, #6, #7)**
-  - [ ] Open `src/langchain_vastdb/vectorstores.py` and replace the stub class with the real `VastDBVectorStore` implementation.
-  - [ ] Add all required imports (see Dev Notes > Canonical imports).
-  - [ ] Implement `__init__` with these parameters: `embedding: Embeddings`, `session: vastdb.Session`, `bucket: str`, `schema: str`, `table_name: str`, `id_column: str = "id"`, `text_column: str = "text"`, `vector_column: str = "vector"`, `metadata_column: str = "metadata"`.
-  - [ ] Store `embedding` as `self._embedding`, session as `self._session`.
-  - [ ] Store column names as `self._id_column`, `self._text_column`, `self._vector_column`, `self._metadata_column`.
-  - [ ] Create `self._table_ref = TableRef(bucket=bucket, schema=schema, table=table_name)`.
-  - [ ] Create `self._table_metadata = TableMetadata(ref=self._table_ref)`.
-  - [ ] Set `self._metadata_loaded = False`.
-  - [ ] Implement the `embeddings` property that returns `self._embedding`.
+- [x] **Task 1: Replace the stub class with the full constructor (AC: #1, #6, #7)**
+  - [x] Open `src/langchain_vastdb/vectorstores.py` and replace the stub class with the real `VastDBVectorStore` implementation.
+  - [x] Add all required imports (see Dev Notes > Canonical imports).
+  - [x] Implement `__init__` with these parameters: `embedding: Embeddings`, `session: vastdb.Session`, `bucket: str`, `schema: str`, `table_name: str`, `id_column: str = "id"`, `text_column: str = "text"`, `vector_column: str = "vector"`, `metadata_column: str = "metadata"`.
+  - [x] Store `embedding` as `self._embedding`, session as `self._session`.
+  - [x] Store column names as `self._id_column`, `self._text_column`, `self._vector_column`, `self._metadata_column`.
+  - [x] Create `self._table_ref = TableRef(bucket=bucket, schema=schema, table=table_name)`.
+  - [x] Create `self._table_metadata = TableMetadata(ref=self._table_ref)`.
+  - [x] Set `self._metadata_loaded = False`.
+  - [x] Implement the `embeddings` property that returns `self._embedding`.
 
-- [ ] **Task 2: Implement `from_connection_params` classmethod (AC: #2, #8)**
-  - [ ] Add `from_connection_params(cls, embedding, endpoint, access_key, secret_key, bucket, schema, table_name, **kwargs) -> VastDBVectorStore` classmethod.
-  - [ ] Inside, call `session = vastdb.connect(endpoint=endpoint, access_key=access_key, secret_key=secret_key)`.
-  - [ ] Return `cls(embedding=embedding, session=session, bucket=bucket, schema=schema, table_name=table_name, **kwargs)`.
-  - [ ] Do NOT store `endpoint`, `access_key`, or `secret_key` as instance attributes.
+- [x] **Task 2: Implement `from_connection_params` classmethod (AC: #2, #8)**
+  - [x] Add `from_connection_params(cls, embedding, endpoint, access_key, secret_key, bucket, schema, table_name, **kwargs) -> VastDBVectorStore` classmethod.
+  - [x] Inside, call `session = vastdb.connect(endpoint=endpoint, access_key=access_key, secret_key=secret_key)`.
+  - [x] Return `cls(embedding=embedding, session=session, bucket=bucket, schema=schema, table_name=table_name, **kwargs)`.
+  - [x] Do NOT store `endpoint`, `access_key`, or `secret_key` as instance attributes.
 
-- [ ] **Task 3: Implement `_get_table` and `invalidate_table_cache` (AC: #3, #4, #5)**
-  - [ ] Implement `_get_table(self, tx: Transaction) -> ITable` following the exact pattern from architecture.md (see Dev Notes > Table access pattern).
-  - [ ] Implement `invalidate_table_cache(self) -> None` that resets `self._metadata_loaded = False` and recreates `self._table_metadata = TableMetadata(ref=self._table_ref)`.
+- [x] **Task 3: Implement `_get_table` and `invalidate_table_cache` (AC: #3, #4, #5)**
+  - [x] Implement `_get_table(self, tx: Transaction) -> ITable` following the exact pattern from architecture.md (see Dev Notes > Table access pattern).
+  - [x] Implement `invalidate_table_cache(self) -> None` that resets `self._metadata_loaded = False` and recreates `self._table_metadata = TableMetadata(ref=self._table_ref)`.
 
-- [ ] **Task 4: Add stub abstract method implementations to satisfy VectorStore (AC: all)**
-  - [ ] Add `add_texts` method stub that raises `NotImplementedError("Implemented in Story 2.2")`.
-  - [ ] Add `similarity_search` method stub that raises `NotImplementedError("Implemented in Story 2.3")`.
-  - [ ] These are required because `VectorStore` has abstract methods. Without them, instantiation fails. They will be replaced in Stories 2.2 and 2.3.
-  - [ ] Add Google-style docstrings on all stubs indicating they are placeholders.
+- [x] **Task 4: Add stub abstract method implementations to satisfy VectorStore (AC: all)**
+  - [x] Add `add_texts` method stub that raises `NotImplementedError("Implemented in Story 2.2")`.
+  - [x] Add `similarity_search` method stub that raises `NotImplementedError("Implemented in Story 2.3")`.
+  - [x] These are required because `VectorStore` has abstract methods. Without them, instantiation fails. They will be replaced in Stories 2.2 and 2.3.
+  - [x] Add Google-style docstrings on all stubs indicating they are placeholders.
 
-- [ ] **Task 5: Add Google-style docstrings with type hints (AC: all)**
-  - [ ] Add class-level docstring explaining VastDBVectorStore, its Template Method architecture, and the 5 hook methods.
-  - [ ] Add docstrings to `__init__`, `from_connection_params`, `_get_table`, `invalidate_table_cache`, and the `embeddings` property.
-  - [ ] Ensure all public and protected method signatures have type hints.
+- [x] **Task 5: Add Google-style docstrings with type hints (AC: all)**
+  - [x] Add class-level docstring explaining VastDBVectorStore, its Template Method architecture, and the 5 hook methods.
+  - [x] Add docstrings to `__init__`, `from_connection_params`, `_get_table`, `invalidate_table_cache`, and the `embeddings` property.
+  - [x] Ensure all public and protected method signatures have type hints.
 
-- [ ] **Task 6: Validate (AC: all)**
-  - [ ] Run `uv run ruff check .` -- must pass with zero warnings.
-  - [ ] Run `uv run python -c "from langchain_vastdb import VastDBVectorStore; print(VastDBVectorStore)"` -- must still succeed.
-  - [ ] Run `uv run pytest tests/unit_tests/ -v` -- must pass (no tests yet, but should not error).
-  - [ ] Verify `from_connection_params` is accessible: `uv run python -c "from langchain_vastdb import VastDBVectorStore; print(hasattr(VastDBVectorStore, 'from_connection_params'))"` should print `True`.
+- [x] **Task 6: Validate (AC: all)**
+  - [x] Run `uv run ruff check .` -- must pass with zero warnings.
+  - [x] Run `uv run python -c "from langchain_vastdb import VastDBVectorStore; print(VastDBVectorStore)"` -- must still succeed.
+  - [x] Run `uv run pytest tests/unit_tests/ -v` -- must pass (no tests yet, but should not error).
+  - [x] Verify `from_connection_params` is accessible: `uv run python -c "from langchain_vastdb import VastDBVectorStore; print(hasattr(VastDBVectorStore, 'from_connection_params'))"` should print `True`.
 
 ## Dev Notes
 
@@ -320,11 +320,25 @@ There are no automated tests to write in this story (Story 2.5 writes unit tests
 
 ### Agent Model Used
 
+claude-opus-4.6
+
 ### Debug Log References
+
+None -- clean implementation, no debugging required.
 
 ### Completion Notes List
 
+- All 6 tasks completed in a single pass with no errors.
+- `uv run ruff check .` passed with zero warnings.
+- `from langchain_vastdb import VastDBVectorStore` imports successfully.
+- `from_connection_params` classmethod is accessible.
+- `uv run pytest tests/unit_tests/ -v` ran cleanly (0 tests collected, as expected).
+- Credentials (access_key, secret_key) are not stored as instance attributes -- only passed to `vastdb.connect()`.
+- Used `Iterable` from `collections.abc` under `TYPE_CHECKING` for `add_texts` signature.
+
 ### File List
+
+- `src/langchain_vastdb/vectorstores.py` -- MODIFIED: stub class replaced with full constructor, session management, table access, and abstract method stubs.
 
 ## Change Log
 
