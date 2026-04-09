@@ -16,3 +16,7 @@
 ## Deferred from: code review of story 2-1-constructor-session-management-and-table-access (2026-04-09)
 
 - Thread-safety: `_metadata_loaded` flag in `VastDBVectorStore._get_table()` has no synchronization. Two threads calling `_get_table` simultaneously when `_metadata_loaded=False` could both call `load(tx)`. Benign in practice since VastDB SDK is sync-only and `load()` is idempotent, but should be considered if future async support introduces concurrency.
+
+## Deferred from: code review of story 2-2-add-texts-and-document-insertion (2026-04-09)
+
+- Float64 inference in RecordBatch: `pa.RecordBatch.from_pydict()` infers float64 for Python float lists in the vector column; VastDB table schema likely uses float32. VastDB SDK handles type coercion on insert. Will be validated in integration tests (Story 3.1).

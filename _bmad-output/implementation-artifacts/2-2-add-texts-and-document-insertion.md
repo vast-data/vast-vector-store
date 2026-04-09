@@ -1,6 +1,6 @@
 # Story 2.2: Add Texts & Document Insertion
 
-Status: review
+Status: done
 
 ## Story
 
@@ -279,3 +279,12 @@ None -- clean implementation, no debugging required.
 ### File List
 
 - `src/langchain_vastdb/vectorstores.py` -- MODIFIED: replaced add_texts stub with real implementation, added _insert_vectors hook, added imports (json, uuid, pyarrow).
+
+### Review Findings
+
+- [x] [Review][Defer] Float64 inference in RecordBatch: `pa.RecordBatch.from_pydict()` infers float64 for Python float lists in the vector column; VastDB table schema likely uses float32 [src/langchain_vastdb/vectorstores.py:218] -- deferred, VastDB SDK handles type coercion on insert; will be validated in integration tests (Story 3.1).
+
+## Change Log
+
+- 2026-04-09: Story 2.2 created by create-story workflow -- comprehensive developer guide for add_texts and document insertion implementation.
+- 2026-04-09: Code review iteration 1 -- clean review, 0 decision-needed, 0 patch, 1 defer, 2 dismissed. Status set to done.
