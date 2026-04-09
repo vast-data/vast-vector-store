@@ -6,6 +6,7 @@ import json
 import uuid
 from typing import TYPE_CHECKING, Any
 
+import ibis
 import pyarrow as pa
 import vastdb
 from langchain_core.documents import Document
@@ -32,13 +33,13 @@ class VastDBVectorStore(VectorStore):
     - Configurable column names for id, text, vector, and metadata columns.
     - The ``embeddings`` property exposing the configured ``Embeddings`` model.
 
-    Five protected hook methods are defined in later stories:
+    Five protected hook methods are available for subclass customization:
 
-    - ``_insert_vectors`` (Story 2.2)
-    - ``_vector_search`` (Story 2.3)
+    - ``_insert_vectors`` — customize record insertion
+    - ``_vector_search`` — customize similarity search behavior
     - ``_delete_by_ids`` (Story 2.4)
     - ``_get_by_ids`` (Story 2.4)
-    - ``_row_to_document`` (Story 2.3)
+    - ``_row_to_document`` — customize row-to-Document conversion
 
     Example:
         .. code-block:: python
@@ -253,9 +254,175 @@ class VastDBVectorStore(VectorStore):
     ) -> list[Document]:
         """Search for documents similar to the query string.
 
-        Placeholder stub -- full implementation lands in Story 2.3.
+        Embeds the query using the configured embedding model, converts
+        an optional ``filter`` dict to an ibis predicate, then delegates
+        to the ``_vector_search`` hook.
 
-        Raises:
-            NotImplementedError: Always, until Story 2.3 is implemented.
+        Args:
+            query: The text query to search for.
+            k: Number of results to return.
+            **kwargs: Additional arguments. Supports ``filter`` (dict) for
+                metadata filtering.
+
+        Returns:
+            List of Documents most similar to the query.
         """
-        raise NotImplementedError("similarity_search is implemented in Story 2.3")
+        query_vector = self._embedding.embed_query(query)
+        predicate = self._build_predicate(kwargs.get("filter"))
+        results = self._vector_search(query_vector, k, predicate=predicate)
+        return [self._row_to_document(row) for row, _ in results]
+
+    def similarity_search_with_score(
+        self,
+        query: str,
+        k: int = 4,
+        **kwargs: Any,
+    ) -> list[tuple[Document, float]]:
+        """Search for documents similar to the query, returning scores.
+
+        Args:
+            query: The text query to search for.
+            k: Number of results to return.
+            **kwargs: Additional arguments. Supports ``filter`` (dict) for
+                metadata filtering.
+
+        Returns:
+            List of (Document, distance_score) tuples, ordered by similarity.
+        """
+        query_vector = self._embedding.embed_query(query)
+        predicate = self._build_predicate(kwargs.get("filter"))
+        results = self._vector_search(query_vector, k, predicate=predicate)
+        return [(self._row_to_document(row, score), score) for row, score in results]
+
+    def similarity_search_by_vector(
+        self,
+        embedding: list[float],
+        k: int = 4,
+        **kwargs: Any,
+    ) -> list[Document]:
+        """Search for documents by a pre-computed embedding vector.
+
+        Skips the embedding step and passes the vector directly to
+        the ``_vector_search`` hook.
+
+        Args:
+            embedding: The pre-computed query embedding vector.
+            k: Number of results to return.
+            **kwargs: Additional arguments. Supports ``filter`` (dict) for
+                metadata filtering.
+
+        Returns:
+            List of Documents most similar to the embedding.
+        """
+        predicate = self._build_predicate(kwargs.get("filter"))
+        results = self._vector_search(embedding, k, predicate=predicate)
+        return [self._row_to_document(row) for row, _ in results]
+
+    def _build_predicate(
+        self, filter_dict: dict | None
+    ) -> ibis.Expr | None:
+        """Convert a filter dict to an ibis predicate expression.
+
+        Builds equality predicates for each key-value pair and combines
+        them with logical AND. Filter keys are interpreted as table column
+        names.
+
+        Args:
+            filter_dict: Optional dict of column-name to value mappings.
+
+        Returns:
+            An ibis predicate expression, or ``None`` if no filter provided.
+        """
+        if not filter_dict:
+            return None
+        predicates = [ibis._[key] == value for key, value in filter_dict.items()]
+        result = predicates[0]
+        for pred in predicates[1:]:
+            result = result & pred
+        return result
+
+    def _vector_search(
+        self,
+        query_vector: list[float],
+        k: int,
+        predicate: ibis.Expr | None = None,
+        *,
+        tx: Transaction | None = None,
+    ) -> list[tuple[dict, float]]:
+        """Search VastDB for similar vectors.
+
+        Default hook implementation that calls ``table.vector_search()``
+        and returns row dicts with distance scores. Subclasses can override
+        this to customize search behavior (e.g., add collection filters).
+
+        Args:
+            query_vector: The query embedding vector.
+            k: Maximum number of results to return.
+            predicate: Optional ibis predicate for filtering.
+            tx: Optional transaction for reuse by subclasses.
+
+        Returns:
+            List of (row_dict, distance_score) tuples.
+        """
+        columns = [self._id_column, self._text_column, self._metadata_column]
+        if tx is not None:
+            return self._do_vector_search(tx, query_vector, k, columns, predicate)
+
+        with self._session.transaction() as new_tx:
+            return self._do_vector_search(new_tx, query_vector, k, columns, predicate)
+
+    def _do_vector_search(
+        self,
+        tx: Transaction,
+        query_vector: list[float],
+        k: int,
+        columns: list[str],
+        predicate: ibis.Expr | None,
+    ) -> list[tuple[dict, float]]:
+        """Execute the vector search within a transaction.
+
+        Args:
+            tx: An active transaction.
+            query_vector: The query embedding vector.
+            k: Maximum number of results.
+            columns: Column names to select.
+            predicate: Optional ibis predicate for filtering.
+
+        Returns:
+            List of (row_dict, distance_score) tuples.
+        """
+        table = self._get_table(tx)
+        reader = table.vector_search(
+            vec=query_vector,
+            columns=columns,
+            limit=k,
+            predicate=predicate,
+        )
+        rows = reader.read_all().to_pylist()
+        results: list[tuple[dict, float]] = []
+        for row in rows:
+            score = row.pop("$distance", 0.0)
+            results.append((row, score))
+        return results
+
+    def _row_to_document(
+        self,
+        row: dict,
+        score: float | None = None,
+    ) -> Document:
+        """Convert a VastDB row dict to a LangChain Document.
+
+        Default hook implementation that extracts text from the configured
+        text column and deserializes JSON metadata. Subclasses can override
+        this to handle typed metadata columns or include score in metadata.
+
+        Args:
+            row: A dict representing a single VastDB row.
+            score: Optional distance score (available for subclass use).
+
+        Returns:
+            A LangChain ``Document`` with page_content and metadata.
+        """
+        page_content = row.get(self._text_column, "")
+        metadata = json.loads(row.get(self._metadata_column, "{}"))
+        return Document(page_content=page_content, metadata=metadata)
