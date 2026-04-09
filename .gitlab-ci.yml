@@ -48,6 +48,8 @@ unit-test:
           - uv.lock
       paths:
         - ${UV_CACHE_DIR}
+  # TODO: remove allow_failure after Story 2.5 adds unit tests
+  allow_failure: true
   script:
     - uv sync --locked
     - uv run pytest tests/unit_tests/ -v
