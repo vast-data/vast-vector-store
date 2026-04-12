@@ -36,7 +36,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-09
-last_updated: 2026-04-12  # 2-4 → done (review passed clean)
+last_updated: 2026-04-12  # 2-5 → ready-for-dev (story created)
 project: vast-vector-store
 project_key: NOKEY
 tracking_system: file-system
@@ -55,7 +55,7 @@ development_status:
   2-2-add-texts-and-document-insertion: done
   2-3-similarity-search-operations: done
   2-4-delete-get-by-ids-and-factory-method: done
-  2-5-unit-tests-for-vastdbvectorstore: backlog
+  2-5-unit-tests-for-vastdbvectorstore: ready-for-dev
   epic-2-retrospective: optional
 
   # Epic 3: LangChain Ecosystem Compliance & Integration Testing
