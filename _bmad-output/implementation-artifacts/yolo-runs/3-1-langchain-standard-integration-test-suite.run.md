@@ -18,4 +18,7 @@ updated: 2026-04-12T00:00:00Z
 
 ### 1-create-story (skipped: story already at ready-for-dev)
 
-### 2-branch (pending)
+### 2-branch (done)
+- summary: Created and checked out branch story/3-1-langchain-standard-integration-test-suite from main (up to date).
+- branch: story/3-1-langchain-standard-integration-test-suite
+- commits: none (branch creation produces no commit)
