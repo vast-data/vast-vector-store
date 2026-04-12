@@ -37,8 +37,8 @@ class VastDBVectorStore(VectorStore):
 
     - ``_insert_vectors`` — customize record insertion
     - ``_vector_search`` — customize similarity search behavior
-    - ``_delete_by_ids`` (Story 2.4)
-    - ``_get_by_ids`` (Story 2.4)
+    - ``_delete_by_ids`` — customize document deletion
+    - ``_get_by_ids`` — customize document retrieval by ID
     - ``_row_to_document`` — customize row-to-Document conversion
 
     Example:
@@ -138,6 +138,51 @@ class VastDBVectorStore(VectorStore):
             table_name=table_name,
             **kwargs,
         )
+
+    @classmethod
+    def from_texts(
+        cls,
+        texts: list[str],
+        embedding: Embeddings,
+        metadatas: list[dict] | None = None,
+        *,
+        session: vastdb.Session,
+        bucket: str,
+        schema: str,
+        table_name: str,
+        **kwargs: Any,
+    ) -> VastDBVectorStore:
+        """Create a VastDBVectorStore and add texts in a single call.
+
+        Convenience factory that constructs a ``VastDBVectorStore`` instance
+        and immediately populates it with the provided texts (and optional
+        metadata). Subclasses inherit this method for free.
+
+        Args:
+            texts: Texts to embed and insert.
+            embedding: The embeddings model used to generate vectors.
+            metadatas: Optional list of metadata dicts, one per text. If
+                omitted, each document is stored with an empty metadata dict.
+            session: An active ``vastdb.Session``.
+            bucket: The VAST bucket name containing the target table.
+            schema: The schema name within the bucket.
+            table_name: The table name to use for vector operations.
+            **kwargs: Additional keyword arguments forwarded to ``__init__``
+                (e.g., custom column names).
+
+        Returns:
+            A populated ``VastDBVectorStore`` instance.
+        """
+        store = cls(
+            embedding=embedding,
+            session=session,
+            bucket=bucket,
+            schema=schema,
+            table_name=table_name,
+            **kwargs,
+        )
+        store.add_texts(texts, metadatas=metadatas)
+        return store
 
     @property
     def embeddings(self) -> Embeddings:
@@ -317,6 +362,114 @@ class VastDBVectorStore(VectorStore):
         predicate = self._build_predicate(kwargs.get("filter"))
         results = self._vector_search(embedding, k, predicate=predicate)
         return [self._row_to_document(row) for row, _ in results]
+
+    def delete(self, ids: list[str] | None = None, **kwargs: Any) -> bool | None:
+        """Delete documents by ID.
+
+        Template method that delegates to the ``_delete_by_ids`` hook.
+        Returns ``None`` (no-op) when ``ids`` is ``None`` or empty.
+
+        Args:
+            ids: List of document IDs to delete. If ``None`` or empty,
+                the method is a no-op and returns ``None``.
+            **kwargs: Additional keyword arguments (unused; present for
+                compatibility with the base class signature).
+
+        Returns:
+            ``True`` on successful deletion, or ``None`` if no IDs were
+            provided.
+        """
+        if not ids:
+            return None
+        return self._delete_by_ids(ids)
+
+    def _delete_by_ids(
+        self,
+        ids: list[str],
+        *,
+        tx: Transaction | None = None,
+    ) -> bool:
+        """Delete documents matching the given IDs from VastDB.
+
+        Default hook implementation. Opens a transaction if one is not
+        provided, retrieves the table, builds an ``isin`` predicate on the
+        ID column, and calls ``table.delete(predicate)``.
+
+        Subclasses may override this method to customise deletion behaviour
+        while keeping the ``delete`` template method intact.
+
+        Args:
+            ids: Non-empty list of document IDs to delete.
+            tx: Optional active transaction. If provided it is reused;
+                otherwise a new transaction is opened.
+
+        Returns:
+            ``True`` on success.
+        """
+        predicate = ibis._[self._id_column].isin(ids)
+        if tx is not None:
+            table = self._get_table(tx)
+            table.delete(predicate)
+            return True
+
+        with self._session.transaction() as new_tx:
+            table = self._get_table(new_tx)
+            table.delete(predicate)
+            return True
+
+    def get_by_ids(self, ids: list[str], /) -> list[Document]:
+        """Retrieve documents by their IDs without performing a search.
+
+        Template method that delegates to the ``_get_by_ids`` hook and
+        converts each returned row dict to a ``Document`` via
+        ``_row_to_document``.
+
+        Args:
+            ids: Positional-only list of document IDs to retrieve.
+
+        Returns:
+            List of ``Document`` objects corresponding to the given IDs.
+            Documents not found in the table are silently omitted.
+        """
+        rows = self._get_by_ids(ids)
+        return [self._row_to_document(row) for row in rows]
+
+    def _get_by_ids(
+        self,
+        ids: list[str],
+        *,
+        tx: Transaction | None = None,
+    ) -> list[dict]:
+        """Retrieve raw row dicts for the given document IDs from VastDB.
+
+        Default hook implementation. Opens a transaction if one is not
+        provided, selects only the id, text, and metadata columns (omitting
+        the large vector column), and returns the results as plain Python
+        dicts via ``read_all().to_pylist()``.
+
+        Subclasses may override this to return additional columns or apply
+        custom post-processing.
+
+        Args:
+            ids: Non-empty list of document IDs to retrieve.
+            tx: Optional active transaction. If provided it is reused;
+                otherwise a new transaction is opened.
+
+        Returns:
+            List of row dicts. Each dict contains the id, text, and metadata
+            columns for a matched document.
+        """
+        predicate = ibis._[self._id_column].isin(ids)
+        columns = [self._id_column, self._text_column, self._metadata_column]
+        if tx is not None:
+            table = self._get_table(tx)
+            reader = table.select(columns=columns, predicate=predicate)
+            return reader.read_all().to_pylist()
+
+        with self._session.transaction() as new_tx:
+            table = self._get_table(new_tx)
+            reader = table.select(columns=columns, predicate=predicate)
+            return reader.read_all().to_pylist()
 
     def _build_predicate(
         self, filter_dict: dict | None
