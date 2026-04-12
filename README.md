@@ -7,9 +7,9 @@ LangChain `VectorStore` interface, enabling similarity search, document storage,
 and retrieval-augmented generation (RAG) workflows backed by VAST Database's
 native vector indexing.
 
-> **Status:** Alpha (v0.0.1). The constructor and session management are
-> available; vector operations (`add_texts`, `similarity_search`, `delete`, etc.)
-> are under active development.
+> **Status:** Alpha (v0.0.1). Core vector operations are implemented: `add_texts`,
+> `similarity_search`, `delete`, `get_by_ids`, and `from_texts`. Unit and
+> integration tests are in progress.
 
 ## Requirements
 
@@ -99,6 +99,37 @@ externally, invalidate the cache:
 
 ```python
 store.invalidate_table_cache()
+```
+
+### Option 3: Create a store and add texts in one call
+
+```python
+from langchain_vastdb import VastDBVectorStore
+
+store = VastDBVectorStore.from_texts(
+    texts=["Paris is the capital of France.", "Berlin is the capital of Germany."],
+    embedding=my_embeddings,
+    session=session,
+    bucket="my-bucket",
+    schema="my-schema",
+    table_name="my-table",
+)
+```
+
+## CRUD operations
+
+```python
+# Add documents
+ids = store.add_texts(["Some text"], metadatas=[{"source": "wiki"}])
+
+# Search
+docs = store.similarity_search("capital city", k=2)
+
+# Retrieve by ID
+docs = store.get_by_ids(ids)
+
+# Delete by ID
+store.delete(ids=ids)
 ```
 
 ## Development
