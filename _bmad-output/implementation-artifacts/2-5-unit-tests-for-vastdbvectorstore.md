@@ -1,6 +1,6 @@
 # Story 2.5: Unit Tests for VastDBVectorStore
 
-Status: review
+Status: done
 
 ## Story
 
