@@ -1,6 +1,6 @@
 # Story 2.4: Delete, Get by IDs & Factory Method
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -39,50 +39,50 @@ so that I have complete CRUD operations and a convenient factory method.
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Implement `delete` template method (AC: #1)**
-  - [ ] Add `delete` method to `VastDBVectorStore` after the search methods block.
-  - [ ] Signature: `delete(self, ids: list[str] | None = None, **kwargs: Any) -> bool | None`. This matches LangChain's `VectorStore.delete()` signature.
-  - [ ] Implementation: if `ids` is `None` or empty, return `None` (no-op). Otherwise delegate to `self._delete_by_ids(ids)` and return its result.
-  - [ ] Add Google-style docstring.
+- [x] **Task 1: Implement `delete` template method (AC: #1)**
+  - [x] Add `delete` method to `VastDBVectorStore` after the search methods block.
+  - [x] Signature: `delete(self, ids: list[str] | None = None, **kwargs: Any) -> bool | None`. This matches LangChain's `VectorStore.delete()` signature.
+  - [x] Implementation: if `ids` is `None` or empty, return `None` (no-op). Otherwise delegate to `self._delete_by_ids(ids)` and return its result.
+  - [x] Add Google-style docstring.
 
-- [ ] **Task 2: Implement `_delete_by_ids` hook (AC: #2, #6)**
-  - [ ] Add `_delete_by_ids` method with the **exact canonical signature**: `_delete_by_ids(self, ids: list[str], *, tx: Transaction | None = None) -> bool`.
-  - [ ] Follow the transaction pattern: if `tx` provided, use it; otherwise open `with self._session.transaction() as new_tx:`.
-  - [ ] Use `self._get_table(tx_var)` for table access.
-  - [ ] Build an ibis predicate: `ibis._[self._id_column].isin(ids)`.
-  - [ ] Call `table.delete(predicate)`.
-  - [ ] Return `True`.
-  - [ ] Add Google-style docstring.
+- [x] **Task 2: Implement `_delete_by_ids` hook (AC: #2, #6)**
+  - [x] Add `_delete_by_ids` method with the **exact canonical signature**: `_delete_by_ids(self, ids: list[str], *, tx: Transaction | None = None) -> bool`.
+  - [x] Follow the transaction pattern: if `tx` provided, use it; otherwise open `with self._session.transaction() as new_tx:`.
+  - [x] Use `self._get_table(tx_var)` for table access.
+  - [x] Build an ibis predicate: `ibis._[self._id_column].isin(ids)`.
+  - [x] Call `table.delete(predicate)`.
+  - [x] Return `True`.
+  - [x] Add Google-style docstring.
 
-- [ ] **Task 3: Implement `get_by_ids` template method (AC: #3)**
-  - [ ] Add `get_by_ids` method after `delete`.
-  - [ ] Signature: `get_by_ids(self, ids: list[str], /) -> list[Document]`. The `/` makes `ids` positional-only, matching LangChain's `VectorStore.get_by_ids()` signature from `langchain-core>=0.3`.
-  - [ ] Implementation: call `rows = self._get_by_ids(ids)`, then return `[self._row_to_document(row) for row in rows]`.
-  - [ ] Add Google-style docstring.
+- [x] **Task 3: Implement `get_by_ids` template method (AC: #3)**
+  - [x] Add `get_by_ids` method after `delete`.
+  - [x] Signature: `get_by_ids(self, ids: list[str], /) -> list[Document]`. The `/` makes `ids` positional-only, matching LangChain's `VectorStore.get_by_ids()` signature from `langchain-core>=0.3`.
+  - [x] Implementation: call `rows = self._get_by_ids(ids)`, then return `[self._row_to_document(row) for row in rows]`.
+  - [x] Add Google-style docstring.
 
-- [ ] **Task 4: Implement `_get_by_ids` hook (AC: #4, #6)**
-  - [ ] Add `_get_by_ids` method with the **exact canonical signature**: `_get_by_ids(self, ids: list[str], *, tx: Transaction | None = None) -> list[dict]`.
-  - [ ] Follow the transaction pattern.
-  - [ ] Use `self._get_table(tx_var)` for table access.
-  - [ ] Build an ibis predicate: `ibis._[self._id_column].isin(ids)`.
-  - [ ] Call `table.select(columns=[self._id_column, self._text_column, self._metadata_column], predicate=predicate)` to get a `RecordBatchReader`.
-  - [ ] Convert: `reader.read_all().to_pylist()` and return the list of dicts.
-  - [ ] Add Google-style docstring.
+- [x] **Task 4: Implement `_get_by_ids` hook (AC: #4, #6)**
+  - [x] Add `_get_by_ids` method with the **exact canonical signature**: `_get_by_ids(self, ids: list[str], *, tx: Transaction | None = None) -> list[dict]`.
+  - [x] Follow the transaction pattern.
+  - [x] Use `self._get_table(tx_var)` for table access.
+  - [x] Build an ibis predicate: `ibis._[self._id_column].isin(ids)`.
+  - [x] Call `table.select(columns=[self._id_column, self._text_column, self._metadata_column], predicate=predicate)` to get a `RecordBatchReader`.
+  - [x] Convert: `reader.read_all().to_pylist()` and return the list of dicts.
+  - [x] Add Google-style docstring.
 
-- [ ] **Task 5: Implement `from_texts` factory classmethod (AC: #5)**
-  - [ ] Add `from_texts` classmethod after `from_connection_params`.
-  - [ ] Signature: `from_texts(cls, texts: list[str], embedding: Embeddings, metadatas: list[dict] | None = None, *, session: vastdb.Session, bucket: str, schema: str, table_name: str, **kwargs: Any) -> VastDBVectorStore`.
-  - [ ] Implementation: create instance via `cls(embedding=embedding, session=session, bucket=bucket, schema=schema, table_name=table_name, **kwargs)`, then call `store.add_texts(texts, metadatas=metadatas)`, then return `store`.
-  - [ ] This is NOT a hook -- it's a convenience factory. [Source: architecture.md Gap Analysis]
-  - [ ] Add Google-style docstring.
+- [x] **Task 5: Implement `from_texts` factory classmethod (AC: #5)**
+  - [x] Add `from_texts` classmethod after `from_connection_params`.
+  - [x] Signature: `from_texts(cls, texts: list[str], embedding: Embeddings, metadatas: list[dict] | None = None, *, session: vastdb.Session, bucket: str, schema: str, table_name: str, **kwargs: Any) -> VastDBVectorStore`.
+  - [x] Implementation: create instance via `cls(embedding=embedding, session=session, bucket=bucket, schema=schema, table_name=table_name, **kwargs)`, then call `store.add_texts(texts, metadatas=metadatas)`, then return `store`.
+  - [x] This is NOT a hook -- it's a convenience factory. [Source: architecture.md Gap Analysis]
+  - [x] Add Google-style docstring.
 
-- [ ] **Task 6: Update class docstring (AC: all)**
-  - [ ] In the class docstring, remove the "(Story 2.4)" annotations from `_delete_by_ids` and `_get_by_ids` since they are now implemented.
+- [x] **Task 6: Update class docstring (AC: all)**
+  - [x] In the class docstring, remove the "(Story 2.4)" annotations from `_delete_by_ids` and `_get_by_ids` since they are now implemented.
 
-- [ ] **Task 7: Validate (AC: all)**
-  - [ ] Run `uv run ruff check .` -- must pass with zero warnings.
-  - [ ] Run `uv run python -c "from langchain_vastdb import VastDBVectorStore"` -- must succeed.
-  - [ ] Run `uv run pytest tests/unit_tests/ -v` -- must not error.
+- [x] **Task 7: Validate (AC: all)**
+  - [x] Run `uv run ruff check .` -- must pass with zero warnings.
+  - [x] Run `uv run python -c "from langchain_vastdb import VastDBVectorStore"` -- must succeed.
+  - [x] Run `uv run pytest tests/unit_tests/ -v` -- must not error.
 
 ## Dev Notes
 
@@ -277,10 +277,18 @@ No automated tests to write (Story 2.5). Validations:
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+claude-sonnet-4-6
 
 ### Debug Log References
 
 ### Completion Notes List
 
+- All 7 tasks implemented in a single file: `src/langchain_vastdb/vectorstores.py`
+- `from_texts` placed after `from_connection_params` (line ~140)
+- `delete`, `_delete_by_ids`, `get_by_ids`, `_get_by_ids` placed after `similarity_search_by_vector`
+- Ruff: 0 warnings. Import check: OK. Pytest: 0 errors (0 unit tests collected — expected, Story 2.5 adds tests).
+- No new imports required; all types already in scope from Stories 2.1–2.3.
+
 ### File List
+
+- `src/langchain_vastdb/vectorstores.py` — MODIFIED: added delete, _delete_by_ids, get_by_ids, _get_by_ids, from_texts; updated class docstring
