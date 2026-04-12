@@ -1,6 +1,6 @@
 # Story 2.5: Unit Tests for VastDBVectorStore
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -40,61 +40,61 @@ so that I can confidently refactor and extend the class without regressions.
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Create test file with imports and fixtures (AC: #1, #2)**
-  - [ ] Create `tests/unit_tests/test_vectorstore.py`
-  - [ ] Import `unittest.mock` (MagicMock, patch, PropertyMock), `pytest`, `json`, `uuid`
-  - [ ] Import `Document` from `langchain_core.documents`
-  - [ ] Import `DeterministicFakeEmbedding` from `langchain_core.embeddings`
-  - [ ] Import `VastDBVectorStore` from `langchain_vastdb`
-  - [ ] Create `mock_session` fixture: `MagicMock(spec=["transaction"])` with transaction context manager wired
-  - [ ] Create `mock_transaction` fixture: the `__enter__` return of `mock_session.transaction()`
-  - [ ] Create `fake_embedding` fixture: `DeterministicFakeEmbedding(size=3)`
-  - [ ] Create `vectorstore` fixture: `VastDBVectorStore(embedding=fake_embedding, session=mock_session, bucket="b", schema="s", table_name="t")`
-  - [ ] Create `sample_rows` fixture: list of dicts representing VastDB rows with id, text, metadata columns
+- [x] **Task 1: Create test file with imports and fixtures (AC: #1, #2)**
+  - [x] Create `tests/unit_tests/test_vectorstore.py`
+  - [x] Import `unittest.mock` (MagicMock, patch, PropertyMock), `pytest`, `json`, `uuid`
+  - [x] Import `Document` from `langchain_core.documents`
+  - [x] Import `DeterministicFakeEmbedding` from `langchain_core.embeddings`
+  - [x] Import `VastDBVectorStore` from `langchain_vastdb`
+  - [x] Create `mock_session` fixture: `MagicMock(spec=["transaction"])` with transaction context manager wired
+  - [x] Create `mock_transaction` fixture: the `__enter__` return of `mock_session.transaction()`
+  - [x] Create `fake_embedding` fixture: `DeterministicFakeEmbedding(size=3)`
+  - [x] Create `vectorstore` fixture: `VastDBVectorStore(embedding=fake_embedding, session=mock_session, bucket="b", schema="s", table_name="t")`
+  - [x] Create `sample_rows` fixture: list of dicts representing VastDB rows with id, text, metadata columns
 
-- [ ] **Task 2: Constructor and configuration tests (AC: #3)**
-  - [ ] Test session-first construction stores session and creates TableRef/TableMetadata
-  - [ ] Test `from_connection_params` patches `vastdb.connect` and delegates to constructor
-  - [ ] Test custom column name configuration (`id_column`, `text_column`, `vector_column`, `metadata_column`)
-  - [ ] Test `embeddings` property returns the provided Embeddings instance
-  - [ ] Test credentials are not stored as instance attributes (no `access_key` or `secret_key` on the instance)
+- [x] **Task 2: Constructor and configuration tests (AC: #3)**
+  - [x] Test session-first construction stores session and creates TableRef/TableMetadata
+  - [x] Test `from_connection_params` patches `vastdb.connect` and delegates to constructor
+  - [x] Test custom column name configuration (`id_column`, `text_column`, `vector_column`, `metadata_column`)
+  - [x] Test `embeddings` property returns the provided Embeddings instance
+  - [x] Test credentials are not stored as instance attributes (no `access_key` or `secret_key` on the instance)
 
-- [ ] **Task 3: Table access and cache tests (AC: #1)**
-  - [ ] Test `_get_table` calls `_table_metadata.load(tx)` on first call and `tx.table_from_metadata()` on every call
-  - [ ] Test `_get_table` skips `load()` on second call (cached metadata)
-  - [ ] Test `invalidate_table_cache` resets `_metadata_loaded` to `False`
+- [x] **Task 3: Table access and cache tests (AC: #1)**
+  - [x] Test `_get_table` calls `_table_metadata.load(tx)` on first call and `tx.table_from_metadata()` on every call
+  - [x] Test `_get_table` skips `load()` on second call (cached metadata)
+  - [x] Test `invalidate_table_cache` resets `_metadata_loaded` to `False`
 
-- [ ] **Task 4: add_texts tests (AC: #4)**
-  - [ ] Test texts are embedded via `embed_documents`
-  - [ ] Test `_insert_vectors` hook receives correct args (texts, embeddings, metadatas, ids)
-  - [ ] Test UUIDs are auto-generated when `ids=None`
-  - [ ] Test explicit IDs are used when provided
-  - [ ] Test empty metadata defaults to `[{}, {}]` when `metadatas=None`
+- [x] **Task 4: add_texts tests (AC: #4)**
+  - [x] Test texts are embedded via `embed_documents`
+  - [x] Test `_insert_vectors` hook receives correct args (texts, embeddings, metadatas, ids)
+  - [x] Test UUIDs are auto-generated when `ids=None`
+  - [x] Test explicit IDs are used when provided
+  - [x] Test empty metadata defaults to `[{}, {}]` when `metadatas=None`
 
-- [ ] **Task 5: Search method tests (AC: #5)**
-  - [ ] Test `similarity_search` embeds query, calls `_vector_search`, returns `list[Document]`
-  - [ ] Test `similarity_search_with_score` returns `list[tuple[Document, float]]`
-  - [ ] Test `similarity_search_by_vector` does NOT call `embed_query` (skips embedding)
-  - [ ] Test filter dict is passed through to `_vector_search` as ibis predicate
-  - [ ] Test `_row_to_document` deserializes JSON metadata and sets `page_content`
-  - [ ] Test `_build_predicate` returns `None` for empty/None input, ibis expr for single key, combined expr for multiple keys
+- [x] **Task 5: Search method tests (AC: #5)**
+  - [x] Test `similarity_search` embeds query, calls `_vector_search`, returns `list[Document]`
+  - [x] Test `similarity_search_with_score` returns `list[tuple[Document, float]]`
+  - [x] Test `similarity_search_by_vector` does NOT call `embed_query` (skips embedding)
+  - [x] Test filter dict is passed through to `_vector_search` as ibis predicate
+  - [x] Test `_row_to_document` deserializes JSON metadata and sets `page_content`
+  - [x] Test `_build_predicate` returns `None` for empty/None input, ibis expr for single key, combined expr for multiple keys
 
-- [ ] **Task 6: Delete and get_by_ids tests (AC: #6)**
-  - [ ] Test `delete(ids=["id1"])` calls `_delete_by_ids` and returns `True`
-  - [ ] Test `delete(ids=None)` returns `None` (no-op)
-  - [ ] Test `delete(ids=[])` returns `None` (no-op)
-  - [ ] Test `get_by_ids` calls `_get_by_ids` and converts rows via `_row_to_document`
-  - [ ] Test `from_texts` constructs instance and calls `add_texts`
+- [x] **Task 6: Delete and get_by_ids tests (AC: #6)**
+  - [x] Test `delete(ids=["id1"])` calls `_delete_by_ids` and returns `True`
+  - [x] Test `delete(ids=None)` returns `None` (no-op)
+  - [x] Test `delete(ids=[])` returns `None` (no-op)
+  - [x] Test `get_by_ids` calls `_get_by_ids` and converts rows via `_row_to_document`
+  - [x] Test `from_texts` constructs instance and calls `add_texts`
 
-- [ ] **Task 7: Hook extensibility tests (AC: #7)**
-  - [ ] Create a test subclass that overrides `_insert_vectors` to track calls
-  - [ ] Verify `add_texts` dispatches to the overridden `_insert_vectors`
-  - [ ] Create a test subclass that overrides `_row_to_document` to add score to metadata
-  - [ ] Verify `similarity_search_with_score` uses the overridden `_row_to_document`
+- [x] **Task 7: Hook extensibility tests (AC: #7)**
+  - [x] Create a test subclass that overrides `_insert_vectors` to track calls
+  - [x] Verify `add_texts` dispatches to the overridden `_insert_vectors`
+  - [x] Create a test subclass that overrides `_row_to_document` to add score to metadata
+  - [x] Verify `similarity_search_with_score` uses the overridden `_row_to_document`
 
-- [ ] **Task 8: Validate (AC: #1)**
-  - [ ] Run `uv run ruff check .` -- must pass with zero warnings
-  - [ ] Run `uv run pytest tests/unit_tests/ -v` -- all tests pass
+- [x] **Task 8: Validate (AC: #1)**
+  - [x] Run `uv run ruff check .` -- must pass with zero warnings
+  - [x] Run `uv run pytest tests/unit_tests/ -v` -- all tests pass
 
 ## Dev Notes
 
@@ -319,10 +319,19 @@ All other files remain unchanged.
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+claude-sonnet-4-6
 
 ### Debug Log References
 
+- Fixed `test_add_texts_embeds_via_embed_documents` and `test_similarity_search_by_vector_skips_embed_query`: `DeterministicFakeEmbedding` is a frozen Pydantic model; instance-level `patch.object` fails. Fixed by patching at class level (`patch.object(DeterministicFakeEmbedding, "embed_documents/embed_query")`).
+
 ### Completion Notes List
 
+- Created `tests/unit_tests/test_vectorstore.py` with 29 unit tests covering all public methods and hook defaults.
+- All 29 tests pass: `uv run pytest tests/unit_tests/ -v` → 29 passed in 3.71s.
+- Ruff: `uv run ruff check .` → All checks passed.
+- Key patterns: `_table_metadata` replaced with `MagicMock()` in `vectorstore` fixture to avoid needing a real VastDB cluster; Pydantic frozen model workaround for spying on embed methods.
+
 ### File List
+
+- tests/unit_tests/test_vectorstore.py (new)
