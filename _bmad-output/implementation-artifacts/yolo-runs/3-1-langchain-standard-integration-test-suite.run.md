@@ -4,9 +4,9 @@ story_file: _bmad-output/implementation-artifacts/3-1-langchain-standard-integra
 branch: story/3-1-langchain-standard-integration-test-suite
 default_branch: main
 remote_host: gitlab
-mr_pr_url: null
-status: in-progress
-current_stage: 6-push-pr
+mr_pr_url: https://git.vastdata.com/genai/vast-vector-store/-/merge_requests/9
+status: done
+current_stage: 8-final-report
 max_iters: 3
 review_iters_used: 1
 ci_iters_used: 0
@@ -36,3 +36,14 @@ updated: 2026-04-12T00:00:00Z
 - next_action_hint: review_converged
 
 ### 5-tech-writer (skipped: no doc-worthy changes — test file + internal bug fix only)
+
+### 6-push-pr (done)
+- summary: Pushed branch to origin. Created MR #9 against main.
+- mr_pr_url: https://git.vastdata.com/genai/vast-vector-store/-/merge_requests/9
+- commits: none (push only)
+
+### 7-ci iter 1 (done, success)
+- summary: Pipeline #2379220 passed on first run. lint (21s), unit-test x4 Python versions (43-46s each), integration-test (21s, tests skipped — VAST cluster env vars not set in GitLab CI project variables). All jobs success.
+- next_action_hint: ci_passed
+
+### 8-final-report (done)
