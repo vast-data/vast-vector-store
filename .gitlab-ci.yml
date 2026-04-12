@@ -62,8 +62,6 @@ integration-test:
   image: ghcr.io/astral-sh/uv:${UV_VERSION}-python${PYTHON_VERSION}-${BASE_LAYER}
   tags:
     - vast-dev-builder
-  # TODO: remove allow_failure after Story 3.1 implements integration tests
-  allow_failure: true
   cache:
     - key:
         files:
