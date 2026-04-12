@@ -1,6 +1,6 @@
 # Story 3.1: LangChain Standard Integration Test Suite
 
-Status: review
+Status: done
 
 ## Story
 
@@ -297,3 +297,14 @@ Claude Sonnet 4 (claude-sonnet-4-6)
 - `src/langchain_vastdb/vectorstores.py` (MODIFIED: _row_to_document sets Document.id)
 - `.gitlab-ci.yml` (MODIFIED: removed allow_failure from integration-test job)
 - `_bmad-output/implementation-artifacts/deferred-work.md` (MODIFIED: AI-2 deferred entry added)
+
+## Senior Developer Review (AI)
+
+**Date:** 2026-04-12
+**Outcome:** Changes Requested (1 patch applied)
+
+### Review Findings
+
+- [ ] [Review][Patch] AI-2 xfail missing `strict=True` [tests/integration_tests/test_vectorstore.py:116] — applied: strict=True added so xpass (when AI-2 bug is fixed) correctly fails the suite and prompts removal of the xfail marker.
+- [x] [Review][Defer] `from vastdb._internal import VectorIndexSpec` uses private API [tests/integration_tests/test_vectorstore.py:12] — deferred, pre-existing SDK limitation (VectorIndexSpec not exported from vastdb public API)
+- [x] [Review][Defer] Idempotent-insert tests may fail if VastDB `insert` allows duplicate rows [tests/integration_tests/test_vectorstore.py] — deferred, requires live-cluster verification; VastDB insert semantics unknown without running against real cluster

@@ -125,11 +125,12 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
         assert docs[0].page_content == "hello world"
 
     @pytest.mark.xfail(
+        strict=True,
         reason=(
             "AI-2: _row_to_document NULL metadata handling — "
             "json.loads(None) raises TypeError when metadata column is NULL. "
             "Deferred to follow-up story."
-        )
+        ),
     )
     def test_row_with_null_metadata_roundtrips(
         self, vectorstore: VectorStore

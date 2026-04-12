@@ -25,6 +25,9 @@
 
 - Metadata None safety in `_row_to_document`: if a row has `None` for the metadata column (e.g., inserted by subclass or external tool), `json.loads(None)` raises TypeError. Base class `_insert_vectors` always writes `json.dumps({})`, so this only affects externally-inserted data. Will be validated in integration tests (Story 3.1).
 
-## Deferred from: story 3-1-langchain-standard-integration-test-suite (2026-04-12)
+## Deferred from: code review of story 3-1-langchain-standard-integration-test-suite (2026-04-12)
+
+- `from vastdb._internal import VectorIndexSpec` uses a private module. `VectorIndexSpec` is not exported from the `vastdb` public API, so `_internal` is the only import path. Should be revisited if a future `vastdb` release exposes this via a public API.
+- `test_add_documents_with_ids_is_idempotent` and `test_add_documents_by_id_with_mutation` in the standard suite require upsert/overwrite semantics. Whether VastDB's `table.insert()` handles duplicate `id` values idempotently (or raises an error, or creates duplicates) is unknown without live-cluster testing. If these tests fail in CI, `_insert_vectors` may need a delete-then-insert upsert pattern and the fix should target a follow-up Epic 3 corrective story.
 
 - **AI-2 (NULL metadata in _row_to_document):** `json.loads(None)` raises `TypeError` when a row's metadata column is NULL (inserted externally bypassing VastDBVectorStore). Test `test_row_with_null_metadata_roundtrips` in `tests/integration_tests/test_vectorstore.py` is marked `@pytest.mark.xfail` for this bug. Proposed fix in `_row_to_document`: replace `json.loads(row.get(self._metadata_column, "{}"))` with `json.loads(metadata_raw) if (metadata_raw := row.get(self._metadata_column)) is not None else {}`. Deferred to a follow-up Epic 3 corrective story.
