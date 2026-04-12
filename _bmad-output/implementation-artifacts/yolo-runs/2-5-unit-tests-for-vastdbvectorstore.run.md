@@ -4,9 +4,9 @@ story_file: _bmad-output/implementation-artifacts/2-5-unit-tests-for-vastdbvecto
 branch: story/2-5-unit-tests-for-vastdbvectorstore
 default_branch: main
 remote_host: gitlab
-mr_pr_url: null
-status: in-progress
-current_stage: 6-push-pr
+mr_pr_url: https://git.vastdata.com/genai/vast-vector-store/-/merge_requests/8
+status: done
+current_stage: 8-final-report
 max_iters: 3
 review_iters_used: 1
 ci_iters_used: 0
@@ -32,3 +32,12 @@ updated: 2026-04-12T00:00:00Z
 - commits: 1a62367 (bmad)
 
 ### 5-tech-writer (skipped: tests-only change, no public API or documentation surface changed)
+
+### 6-push-pr (done)
+- mr_pr_url: https://git.vastdata.com/genai/vast-vector-store/-/merge_requests/8
+- commits: 4 total on branch
+
+### 7-ci iter 1 (success)
+- pipeline_id: 2377751
+- lint: success, unit-test (3.10/3.11/3.12/3.13): success, integration-test: failed (allow_failure: true — needs real VAST cluster, expected)
+- pipeline_state: success
