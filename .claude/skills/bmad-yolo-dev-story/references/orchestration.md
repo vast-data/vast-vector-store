@@ -57,12 +57,58 @@ updated: 2026-04-09T14:47:00Z
 
 Append, never rewrite history. If a stage produces no commits, say so explicitly.
 
+## Story discovery and entry point selection
+
+Before entering the stage sequence, the orchestrator must discover which story to work on and determine the correct starting stage based on its current sprint status. **This runs after config loading and arg parsing, but before the run-log resume check** (SKILL.md step 3).
+
+### Discovery logic
+
+1. **Read `{implementation_artifacts}/sprint-status.yaml`** and parse the `development_status` section.
+2. **Find the target story:**
+   - If the user passed an explicit story id or path: find that story's key in sprint-status. If a literal file path was given and the file exists, extract the story key from the filename (e.g. `2-4-delete-get-by-ids.md` → `2-4-delete-get-by-ids`), then look up its status in sprint-status.
+   - Otherwise: scan `development_status` top-to-bottom for the **first story key** (pattern `N-N-name`, not epic keys or retrospectives) whose status is **not `done`**.
+3. **If no non-done story is found**, halt with `status: blocked, reason: "all stories are done — run sprint-planning or correct-course to add more"`.
+
+### Entry point mapping
+
+Based on the discovered story's sprint status:
+
+| Sprint status | Starting stage | Notes |
+|---|---|---|
+| `backlog` | **Stage 1** (create-story) | Full workflow. |
+| `ready-for-dev` | **Stage 2** (branch) → Stage 3 (dev-story) | Stage 1 skipped. Update sprint-status to `in-progress` before proceeding. |
+| `in-progress` | **Stage 2** (branch) → Stage 3 (dev-story) | Stage 1 skipped. Branch may already exist (Stage 2 handles this). |
+| `review` | **Stage 2** (branch) → Stage 4 (review-fix loop) | Stages 1 and 3 skipped. Branch should already exist. |
+
+### Run log initialization for skipped Stage 1
+
+When starting at Stage 2 or later (story status ≠ `backlog`), the orchestrator must still initialize the run log before proceeding:
+
+1. Derive `story_key` from the sprint-status key (e.g. `2-4-delete-get-by-ids`).
+2. Derive `story_file` from the resolved `story_location` in sprint-status.yaml + `<story_key>.md`.
+3. **Verify the story file exists on disk.** If it doesn't, halt with `status: blocked, reason: "sprint-status says <status> but story file not found at <path>"`.
+4. Create the run log at `{implementation_artifacts}/yolo-runs/<story-key>.run.md` with the standard YAML front matter. Set `current_stage` to the entry point determined above.
+5. Append `### 1-create-story (skipped: story already at <status>)` to the stage log.
+6. Commit as `bmad: <story-key>: initialize yolo run log`.
+
+### Sprint-status update on entry
+
+- When entering at `ready-for-dev`: update the story's status in sprint-status.yaml to `in-progress` and commit as `bmad: <story-key>: update sprint status to in-progress`.
+- When entering at `in-progress` or `review`: no sprint-status change needed.
+
+### Run-log resume takes priority
+
+After discovery, check for an existing run log (SKILL.md step 4). If one exists with `status: in-progress`, resume from the run log's `current_stage` — ignore the status-based entry point. The run log is the more precise record of where the workflow actually stopped.
+
 ## Stage sequence
 
-Run stages in this order. Each stage is completed before the next begins. Halt the entire workflow on any `blocked`/`failed` outcome. **Before every stage, re-read the run log** to recover state — do not trust scrollback.
+Run stages in this order. Each stage is completed before the next begins. Halt the entire workflow on any `blocked`/`failed` outcome. **Before every stage, re-read the run log** to recover state — do not trust scrollback. **Skip stages before the determined entry point** — the run log will already contain `(skipped: ...)` entries for them.
 
-### Stage 1 — Create story (inline skill invocation)
+### Stage 1 — Create story (conditional — inline skill invocation)
 
+**Skip this stage if the entry point is Stage 2 or later** (story status was not `backlog`). The run log already has `### 1-create-story (skipped: ...)`.
+
+When this stage runs:
 - Before invoking: re-read the run log if it exists.
 - Read the `create-story` block in `references/stage-prompts.md` for the exact YOLO overrides and halt-point defaults for this stage.
 - Invoke `bmad-create-story` via the `Skill` tool. While following its instructions inline, apply every override from the `create-story` prompt block: auto-discover next backlog story (or use the explicit story id/path the user passed), timebox web research, escalate if no backlog story is available.
@@ -80,8 +126,11 @@ Run stages in this order. Each stage is completed before the next begins. Halt t
 - No commit needed (branch creation doesn't produce one).
 - Append `### 2-branch (done)` to the run log with the branch name and advance.
 
-### Stage 3 — Dev story (inline skill invocation)
+### Stage 3 — Dev story (conditional — inline skill invocation)
 
+**Skip this stage if the entry point is Stage 4** (story sprint status was `review`). Append `### 3-dev-story (skipped: story already at review)` to the run log and advance to Stage 4.
+
+When this stage runs:
 - Re-read the run log for `story_file`, `story_key`, `branch`.
 - Read the `dev-story` block in `references/stage-prompts.md` for the exact YOLO overrides. This includes: auto-select the correct story, escalate on 3 consecutive implementation failures, escalate on new-dependency-required halts, skip the end-of-workflow explanations prompt.
 - Invoke `bmad-dev-story` via the `Skill` tool. Apply every override. Commit incrementally per the commit-discipline rules (one `code:` per logical change, `bmad:` for story file updates).

@@ -59,9 +59,11 @@ When following a BMAD skill's instructions inline within a yolo run, these rules
 
 ---
 
-## Stage 1 — Create story (`bmad-create-story`)
+## Stage 1 — Create story (`bmad-create-story`) — conditional
 
-**Mission:** Run `bmad-create-story` to create the next story file for this project.
+**This stage only runs when the discovered story's sprint status is `backlog`.** If the story is already at `ready-for-dev`, `in-progress`, or `review`, the orchestrator skips this stage entirely — see `references/orchestration.md` § "Story discovery and entry point selection" for details. The run log will contain `### 1-create-story (skipped: story already at <status>)`.
+
+**Mission (when running):** Run `bmad-create-story` to create the next story file for this project.
 
 **Context to have in hand before invoking:**
 - Project root, `{implementation_artifacts}`, `{planning_artifacts}`, `{project_knowledge}` from config.

@@ -19,20 +19,25 @@ Develops a BMAD story end-to-end without human intervention. Chains `bmad-create
 
 2. **Parse args.** Extract optional story id/path and the flags above. Defaults: `max_iters=3`, all stages enabled.
 
-3. **Detect fresh run vs resume.** Check `{implementation_artifacts}/yolo-runs/` for an in-progress run log matching the requested story. If one exists with status not in `{done, failed}`, this is a resume — recover state from that file before continuing.
+3. **Discover story and determine entry point.** See `references/orchestration.md` § "Story discovery and entry point selection" for full logic. In short: find the first non-`done` story in sprint-status.yaml (or the one matching the explicit arg), check its status, and pick the starting stage:
+   - `backlog` → Stage 1 (create-story, full workflow)
+   - `ready-for-dev` / `in-progress` → Stage 2 (branch) → Stage 3 (dev-story)
+   - `review` → Stage 2 (branch) → Stage 4 (review-fix loop)
 
-4. **Verify pre-conditions** (fail fast, do NOT just barrel through):
+4. **Detect fresh run vs resume.** Check `{implementation_artifacts}/yolo-runs/` for an in-progress run log matching the discovered story. If one exists with status not in `{done, failed}`, this is a resume — recover state from that file before continuing. **Run-log resume takes priority over status-based entry** — if a run log exists, resume from the run log's current stage regardless of sprint-status.
+
+5. **Verify pre-conditions** (fail fast, do NOT just barrel through):
    - Working tree clean (`git status --porcelain` empty). If dirty, halt with a clear message. Do not stash or discard.
    - On the project's default branch (usually `main`) OR current branch is a `story/*` branch matching a resume scenario. Otherwise halt.
    - **Detect remote host FIRST**, then verify only the matching CLI tool. Detection rules in `references/push-pr-ci.md` under "Remote detection" — apply them in order. Cache the result in the run log so later stages don't re-detect. If `--remote-host` was passed, skip detection and use that value verbatim. Then verify the matching tool (`gh auth status` for github, `glab auth status` for gitlab) succeeds. **Do not run `gh auth status` unless detection said github.** Skip this entire check if `--no-push` is set.
 
-5. **Load `references/orchestration.md`** for the stage sequence, run log format, resume logic, and escalation rules. Route to per-stage references (`references/stage-prompts.md`, `references/push-pr-ci.md`) on demand.
+6. **Load `references/orchestration.md`** for the stage sequence, run log format, resume logic, and escalation rules. Route to per-stage references (`references/stage-prompts.md`, `references/push-pr-ci.md`) on demand.
 
 ## Stages (high level — full details in `references/orchestration.md`)
 
 | # | Stage | Runs as | Returns |
 |---|-------|---------|---------|
-| 1 | Create story (`bmad-create-story`) | inline skill invocation | story key + file path written to run log |
+| 1 | Create story (`bmad-create-story`) — **skipped if story status ≠ `backlog`** | inline skill invocation | story key + file path written to run log |
 | 2 | Branch (`story/<key>` from default) | inline bash | branch name written to run log |
 | 3 | Dev story (`bmad-dev-story`) | inline skill invocation | files modified, status written to run log |
 | 4 | Review-fix loop (`bmad-code-review` ↔ `bmad-dev-story`, max `max_iters`) | inline per iteration | iterations, final status written to run log |
