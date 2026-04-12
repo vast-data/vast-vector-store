@@ -1,6 +1,6 @@
 # Story 2.4: Delete, Get by IDs & Factory Method
 
-Status: review
+Status: done
 
 ## Story
 
@@ -292,3 +292,7 @@ claude-sonnet-4-6
 ### File List
 
 - `src/langchain_vastdb/vectorstores.py` — MODIFIED: added delete, _delete_by_ids, get_by_ids, _get_by_ids, from_texts; updated class docstring
+
+### Review Findings
+
+✅ Clean review — all layers passed. No findings (0 decision-needed, 0 patch, 0 deferred, 0 dismissed).
