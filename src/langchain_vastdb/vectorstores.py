@@ -578,4 +578,5 @@ class VastDBVectorStore(VectorStore):
         """
         page_content = row.get(self._text_column, "")
         metadata = json.loads(row.get(self._metadata_column, "{}"))
-        return Document(page_content=page_content, metadata=metadata)
+        doc_id = row.get(self._id_column)
+        return Document(page_content=page_content, metadata=metadata, id=doc_id)
