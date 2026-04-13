@@ -12,7 +12,7 @@ import vastdb
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
-from vastdb.table_metadata import TableMetadata, TableRef
+from vastdb.table_metadata import TableMetadata, TableRef, VectorIndex
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -204,6 +204,15 @@ class VastDBVectorStore(VectorStore):
         """
         if not self._metadata_loaded:
             self._table_metadata.load(tx)
+            # Some cluster versions do not return vector index metadata in table
+            # stats. Fall back to constructing VectorIndex from known column config
+            # so that table.vector_search() can proceed (uses array_distance SQL).
+            if self._table_metadata._vector_index is None:
+                self._table_metadata._vector_index = VectorIndex(
+                    column=self._vector_column,
+                    distance_metric="l2sq",
+                    sql_distance_function="array_distance",
+                )
             self._metadata_loaded = True
         return tx.table_from_metadata(self._table_metadata)
 
@@ -225,16 +234,23 @@ class VastDBVectorStore(VectorStore):
         ids: list[str] | None = None,
         **kwargs: Any,
     ) -> list[str]:
-        """Add texts to the vector store.
+        """Add texts to the vector store with upsert semantics.
 
-        Embeds the provided texts using the configured embedding model,
-        then delegates storage to the ``_insert_vectors`` hook.
+        Embeds the provided texts using the configured embedding model.
+        When IDs are provided (either via the ``ids`` argument or from
+        ``Document.id`` fields), any existing rows with those IDs are deleted
+        before inserting, ensuring upsert semantics. The delete and insert
+        happen in a single transaction.
+
+        Per-element ``None`` values in ``ids`` are replaced with auto-generated
+        UUIDs, so a mixed list (some explicit IDs, some ``None``) is supported.
 
         Args:
             texts: Texts to add to the store.
             metadatas: Optional metadata dicts, one per text.
                 Defaults to empty dicts if not provided.
-            ids: Optional document IDs. Auto-generated UUIDs if not provided.
+            ids: Optional document IDs. Auto-generated UUIDs for any
+                element that is ``None`` or when the whole list is ``None``.
             **kwargs: Additional keyword arguments (unused by default).
 
         Returns:
@@ -244,9 +260,17 @@ class VastDBVectorStore(VectorStore):
         vectors = self._embedding.embed_documents(texts_list)
         if ids is None:
             ids = [str(uuid.uuid4()) for _ in texts_list]
+        else:
+            # Replace per-element None with generated UUIDs (e.g. when
+            # Document.id is None for some documents but not others).
+            ids = [id_ if id_ is not None else str(uuid.uuid4()) for id_ in ids]
         if metadatas is None:
             metadatas = [{} for _ in texts_list]
-        return self._insert_vectors(texts_list, vectors, metadatas, ids)
+        # Upsert: delete existing rows with these IDs, then insert — atomic.
+        with self._session.transaction() as tx:
+            self._delete_by_ids(ids, tx=tx)
+            self._insert_vectors(texts_list, vectors, metadatas, ids, tx=tx)
+        return ids
 
     def _insert_vectors(
         self,
@@ -273,11 +297,13 @@ class VastDBVectorStore(VectorStore):
         Returns:
             The list of document IDs that were inserted.
         """
+        vector_dim = len(embeddings[0]) if embeddings else 0
+        vector_type = pa.list_(pa.field("item", pa.float32(), nullable=False), vector_dim)
         batch = pa.RecordBatch.from_pydict(
             {
                 self._id_column: ids,
                 self._text_column: texts,
-                self._vector_column: embeddings,
+                self._vector_column: pa.array(embeddings, type=vector_type),
                 self._metadata_column: [json.dumps(m) for m in metadatas],
             }
         )
@@ -392,8 +418,11 @@ class VastDBVectorStore(VectorStore):
         """Delete documents matching the given IDs from VastDB.
 
         Default hook implementation. Opens a transaction if one is not
-        provided, retrieves the table, builds an ``isin`` predicate on the
-        ID column, and calls ``table.delete(predicate)``.
+        provided, selects matching rows with their internal ``$row_id``
+        column, then passes that RecordBatch to ``table.delete()``.
+
+        ``table.delete()`` requires a RecordBatch containing the internal
+        ``$row_id`` field — it does not accept ibis predicates directly.
 
         Subclasses may override this method to customise deletion behaviour
         while keeping the ``delete`` template method intact.
@@ -409,12 +438,18 @@ class VastDBVectorStore(VectorStore):
         predicate = ibis._[self._id_column].isin(ids)
         if tx is not None:
             table = self._get_table(tx)
-            table.delete(predicate)
+            rows = table.select(
+                columns=[self._id_column], predicate=predicate, internal_row_id=True
+            ).read_all()
+            table.delete(rows)
             return True
 
         with self._session.transaction() as new_tx:
             table = self._get_table(new_tx)
-            table.delete(predicate)
+            rows = table.select(
+                columns=[self._id_column], predicate=predicate, internal_row_id=True
+            ).read_all()
+            table.delete(rows)
             return True
 
     def get_by_ids(self, ids: list[str], /) -> list[Document]:
@@ -534,6 +569,10 @@ class VastDBVectorStore(VectorStore):
     ) -> list[tuple[dict, float]]:
         """Execute the vector search within a transaction.
 
+        Attempts native ``table.vector_search()`` via ADBC. Falls back to an
+        in-memory dot-product scan when ADBC is not available (e.g. on macOS
+        without the VAST ADBC shared library).
+
         Args:
             tx: An active transaction.
             query_vector: The query embedding vector.
@@ -544,19 +583,68 @@ class VastDBVectorStore(VectorStore):
         Returns:
             List of (row_dict, distance_score) tuples.
         """
+        from vastdb.transaction import NoAdbcConnectionError
+
         table = self._get_table(tx)
-        reader = table.vector_search(
-            vec=query_vector,
-            columns=columns,
-            limit=k,
-            predicate=predicate,
-        )
-        rows = reader.read_all().to_pylist()
-        results: list[tuple[dict, float]] = []
-        for row in rows:
-            score = row.pop("$distance", 0.0)
-            results.append((row, score))
-        return results
+        try:
+            reader = table.vector_search(
+                vec=query_vector,
+                columns=columns,
+                limit=k,
+                predicate=predicate,
+            )
+            rows = reader.read_all().to_pylist()
+            results: list[tuple[dict, float]] = []
+            for row in rows:
+                score = row.pop("$distance", 0.0)
+                results.append((row, score))
+            return results
+        except NoAdbcConnectionError:
+            return self._do_vector_search_fallback(tx, query_vector, k, columns, predicate)
+
+    def _do_vector_search_fallback(
+        self,
+        tx: Transaction,
+        query_vector: list[float],
+        k: int,
+        columns: list[str],
+        predicate: ibis.Expr | None,
+    ) -> list[tuple[dict, float]]:
+        """In-memory dot-product fallback when ADBC is unavailable.
+
+        Reads id + vector columns, ranks by dot product, then fetches full rows
+        for the top-k hits. Same two-phase pattern used in vast-pipelines.
+        """
+        table = self._get_table(tx)
+        scan_columns = [self._id_column, self._vector_column]
+        reader = table.select(predicate=predicate, columns=scan_columns)
+        all_rows = reader.read_all().to_pylist()
+
+        scored: list[tuple[str, float]] = []
+        for row in all_rows:
+            vec = row.get(self._vector_column)
+            if isinstance(vec, list):
+                score = sum(a * b for a, b in zip(query_vector, vec))
+                scored.append((row[self._id_column], score))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        top_ids = [id_ for id_, _ in scored[:k]]
+        top_scores = {id_: score for id_, score in scored[:k]}
+
+        if not top_ids:
+            return []
+
+        id_predicate = ibis._[self._id_column].isin(top_ids)
+        combined = id_predicate if predicate is None else (predicate & id_predicate)
+        reader = table.select(predicate=combined, columns=columns)
+        full_rows = reader.read_all().to_pylist()
+
+        row_by_id = {row[self._id_column]: row for row in full_rows}
+        return [
+            (row_by_id[id_], top_scores[id_])
+            for id_ in top_ids
+            if id_ in row_by_id
+        ]
 
     def _row_to_document(
         self,
