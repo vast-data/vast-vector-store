@@ -9,7 +9,9 @@ import pytest
 import vastdb
 from langchain_core.vectorstores import VectorStore
 from langchain_tests.integration_tests import VectorStoreIntegrationTests
+from vastdb._adbc import AdbcDriver
 from vastdb._internal import VectorIndexSpec
+from vastdb.config import BackoffConfig
 
 from langchain_vastdb import VastDBVectorStore
 
@@ -18,11 +20,10 @@ from langchain_vastdb import VastDBVectorStore
 # ---------------------------------------------------------------------------
 
 REQUIRED_ENV = [
-    "VASTDB_ENDPOINT",
-    "VASTDB_ACCESS_KEY",
-    "VASTDB_SECRET_KEY",
-    "VASTDB_TEST_BUCKET",
-    "VASTDB_TEST_SCHEMA",
+    "VASTDB__ENDPOINT",
+    "VASTDB__ACCESS_KEY",
+    "VASTDB__SECRET_KEY",
+    "VASTDB__BUCKET",
 ]
 
 _missing = [k for k in REQUIRED_ENV if not os.environ.get(k)]
@@ -37,7 +38,10 @@ VECTOR_DIM = 6
 _ARROW_SCHEMA = pa.schema([
     pa.field("id", pa.string()),
     pa.field("text", pa.string()),
-    pa.field("vector", pa.list_(pa.float32(), list_size=VECTOR_DIM)),
+    pa.field(
+        "vector",
+        pa.list_(pa.field("item", pa.float32(), nullable=False), list_size=VECTOR_DIM),
+    ),
     pa.field("metadata", pa.string()),
 ])
 
@@ -63,30 +67,42 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
     def vectorstore(self) -> Generator[VectorStore, None, None]:  # type: ignore[override]
         """Yield an empty VastDBVectorStore backed by a dedicated, isolated test table.
 
-        Creates a uniquely-named table on the test VAST cluster before yielding,
-        and drops it unconditionally in the finally block.
+        Creates a uniquely-named schema and table on the test VAST cluster before
+        yielding, and drops both unconditionally in the finally block.
 
-        Required env vars: VASTDB_ENDPOINT, VASTDB_ACCESS_KEY, VASTDB_SECRET_KEY,
-        VASTDB_TEST_BUCKET, VASTDB_TEST_SCHEMA.
+        Required env vars: VASTDB__ENDPOINT, VASTDB__ACCESS_KEY, VASTDB__SECRET_KEY,
+        VASTDB__BUCKET. Optional: VASTDB__SCHEMA (auto-generated unique name if unset).
         """
-        endpoint = os.environ["VASTDB_ENDPOINT"]
-        access_key = os.environ["VASTDB_ACCESS_KEY"]
-        secret_key = os.environ["VASTDB_SECRET_KEY"]
-        bucket = os.environ["VASTDB_TEST_BUCKET"]
-        schema = os.environ["VASTDB_TEST_SCHEMA"]
-        table_name = f"lc_vs_it_{uuid.uuid4().hex[:12]}"
+        endpoint = os.environ["VASTDB__ENDPOINT"]
+        access_key = os.environ["VASTDB__ACCESS_KEY"]
+        secret_key = os.environ["VASTDB__SECRET_KEY"]
+        bucket = os.environ["VASTDB__BUCKET"]
+        run_id = uuid.uuid4().hex[:12]
+        schema = os.environ.get("VASTDB__SCHEMA") or f"lc_vs_it_{run_id}"
+        table_name = f"lc_vs_it_{run_id}"
+        schema_created = False
 
+        adbc_driver_path = os.environ.get("VASTDB__ADBC_DRIVER_PATH")
+        adbc_driver = AdbcDriver.from_local_path(adbc_driver_path) if adbc_driver_path else None
         session = vastdb.connect(
             endpoint=endpoint,
-            access_key=access_key,
-            secret_key=secret_key,
+            access=access_key,
+            secret=secret_key,
+            timeout=10,
+            ssl_verify=False,
+            backoff_config=BackoffConfig(max_tries=2, max_time=15.0),
+            adbc_driver=adbc_driver,
         )
 
         with session.transaction() as tx:
-            tx.bucket(bucket).schema(schema).create_table(
+            b = tx.bucket(bucket)
+            if not os.environ.get("VASTDB__SCHEMA"):
+                b.create_schema(schema)
+                schema_created = True
+            b.schema(schema).create_table(
                 table_name,
                 _ARROW_SCHEMA,
-                vector_index=VectorIndexSpec("vector", "cosine"),
+                vector_index=VectorIndexSpec("vector", "l2sq"),
             )
 
         store = VastDBVectorStore(
@@ -101,7 +117,10 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
         finally:
             try:
                 with session.transaction() as tx:
-                    tx.bucket(bucket).schema(schema).table(table_name).drop()
+                    sc = tx.bucket(bucket).schema(schema)
+                    sc.table(table_name).drop()
+                    if schema_created:
+                        sc.drop()
             except Exception:
                 pass
 
