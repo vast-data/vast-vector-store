@@ -74,8 +74,8 @@ integration-test:
   after_script:
     - uv cache prune --ci
   # These variables must be set at the GitLab project level:
-  # VASTDB_ENDPOINT, VASTDB_ACCESS_KEY, VASTDB_SECRET_KEY,
-  # VASTDB_TEST_BUCKET, VASTDB_TEST_SCHEMA
+  # VASTDB__ENDPOINT, VASTDB__ACCESS_KEY, VASTDB__SECRET_KEY,
+  # VASTDB__BUCKET. Optional: VASTDB__SCHEMA (defaults to "test")
 
 # -- Publish to PyPI: only on version tags --
 # NOTE: Before first publish, register this project as a trusted publisher
