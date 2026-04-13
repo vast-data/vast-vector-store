@@ -9,6 +9,7 @@ import pytest
 import vastdb
 from langchain_core.vectorstores import VectorStore
 from langchain_tests.integration_tests import VectorStoreIntegrationTests
+from langchain_tests.integration_tests.vectorstores import EMBEDDING_SIZE
 from vastdb._adbc import AdbcDriver
 from vastdb._internal import VectorIndexSpec
 from vastdb.config import BackoffConfig
@@ -32,8 +33,8 @@ pytestmark = pytest.mark.skipif(
     reason=f"Missing required VAST env vars: {_missing}",
 )
 
-# Must match EMBEDDING_SIZE in langchain_tests.integration_tests.vectorstores
-VECTOR_DIM = 6
+# Sourced from langchain_tests so a future bump is picked up automatically.
+VECTOR_DIM = EMBEDDING_SIZE
 
 _ARROW_SCHEMA = pa.schema([
     pa.field("id", pa.string()),
@@ -71,16 +72,17 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
         yielding, and drops both unconditionally in the finally block.
 
         Required env vars: VASTDB__ENDPOINT, VASTDB__ACCESS_KEY, VASTDB__SECRET_KEY,
-        VASTDB__BUCKET. Optional: VASTDB__SCHEMA (auto-generated unique name if unset).
+        VASTDB__BUCKET. Optional: VASTDB__ADBC_DRIVER_PATH (path to local ADBC
+        shared library for macOS dev). Load env vars via your IDE's run config,
+        `direnv`, or a shell one-liner such as `set -a && source .env && set +a`.
         """
         endpoint = os.environ["VASTDB__ENDPOINT"]
         access_key = os.environ["VASTDB__ACCESS_KEY"]
         secret_key = os.environ["VASTDB__SECRET_KEY"]
         bucket = os.environ["VASTDB__BUCKET"]
         run_id = uuid.uuid4().hex[:12]
-        schema = os.environ.get("VASTDB__SCHEMA") or f"lc_vs_it_{run_id}"
+        schema = f"lc_vs_it_{run_id}"
         table_name = f"lc_vs_it_{run_id}"
-        schema_created = False
 
         adbc_driver_path = os.environ.get("VASTDB__ADBC_DRIVER_PATH")
         adbc_driver = AdbcDriver.from_local_path(adbc_driver_path) if adbc_driver_path else None
@@ -96,9 +98,7 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
 
         with session.transaction() as tx:
             b = tx.bucket(bucket)
-            if not os.environ.get("VASTDB__SCHEMA"):
-                b.create_schema(schema)
-                schema_created = True
+            b.create_schema(schema)
             b.schema(schema).create_table(
                 table_name,
                 _ARROW_SCHEMA,
@@ -119,8 +119,7 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
                 with session.transaction() as tx:
                     sc = tx.bucket(bucket).schema(schema)
                     sc.table(table_name).drop()
-                    if schema_created:
-                        sc.drop()
+                    sc.drop()
             except Exception:
                 pass
 

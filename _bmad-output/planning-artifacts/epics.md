@@ -419,7 +419,7 @@ So that I can trust it behaves identically to any other LangChain partner Vector
 
 **Given** the integration test setup
 **When** connection parameters are configured
-**Then** they are read from environment variables (`VASTDB_ENDPOINT`, `VASTDB_ACCESS_KEY`, `VASTDB_SECRET_KEY`, `VASTDB_TEST_BUCKET`, `VASTDB_TEST_SCHEMA`)
+**Then** they are read from environment variables (`VASTDB__ENDPOINT`, `VASTDB__ACCESS_KEY`, `VASTDB__SECRET_KEY`, `VASTDB__BUCKET` — double-underscore convention shared with `vast-pipelines`; schema is auto-generated per test run)
 
 **Given** the integration test lifecycle
 **When** each test runs

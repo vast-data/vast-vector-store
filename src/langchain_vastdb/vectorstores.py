@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -19,6 +20,9 @@ if TYPE_CHECKING:
 
     from vastdb.table import ITable
     from vastdb.transaction import Transaction
+
+
+_logger = logging.getLogger(__name__)
 
 
 class VastDBVectorStore(VectorStore):
@@ -207,7 +211,17 @@ class VastDBVectorStore(VectorStore):
             # Some cluster versions do not return vector index metadata in table
             # stats. Fall back to constructing VectorIndex from known column config
             # so that table.vector_search() can proceed (uses array_distance SQL).
+            # WARNING: the distance metric is hardcoded to l2sq — if the real
+            # index uses a different metric (cosine, ip), search results will
+            # be silently wrong.
             if self._table_metadata._vector_index is None:
+                _logger.warning(
+                    "VastDB cluster returned no vector index metadata for table "
+                    "%s; falling back to hardcoded l2sq VectorIndex. Search "
+                    "results will be incorrect if the table is actually "
+                    "indexed with a different distance metric.",
+                    self._table_ref,
+                )
                 self._table_metadata._vector_index = VectorIndex(
                     column=self._vector_column,
                     distance_metric="l2sq",
@@ -257,7 +271,10 @@ class VastDBVectorStore(VectorStore):
             List of IDs for the added texts.
         """
         texts_list = list(texts)
+        if not texts_list:
+            return []
         vectors = self._embedding.embed_documents(texts_list)
+        ids_provided = ids is not None
         if ids is None:
             ids = [str(uuid.uuid4()) for _ in texts_list]
         else:
@@ -266,9 +283,11 @@ class VastDBVectorStore(VectorStore):
             ids = [id_ if id_ is not None else str(uuid.uuid4()) for id_ in ids]
         if metadatas is None:
             metadatas = [{} for _ in texts_list]
-        # Upsert: delete existing rows with these IDs, then insert — atomic.
         with self._session.transaction() as tx:
-            self._delete_by_ids(ids, tx=tx)
+            # Upsert only when the caller supplied IDs — fresh UUIDs cannot
+            # collide with existing rows, so the delete round-trip is skipped.
+            if ids_provided:
+                self._delete_by_ids(ids, tx=tx)
             self._insert_vectors(texts_list, vectors, metadatas, ids, tx=tx)
         return ids
 
@@ -297,7 +316,9 @@ class VastDBVectorStore(VectorStore):
         Returns:
             The list of document IDs that were inserted.
         """
-        vector_dim = len(embeddings[0]) if embeddings else 0
+        if not embeddings:
+            return ids
+        vector_dim = len(embeddings[0])
         vector_type = pa.list_(pa.field("item", pa.float32(), nullable=False), vector_dim)
         batch = pa.RecordBatch.from_pydict(
             {
@@ -435,6 +456,8 @@ class VastDBVectorStore(VectorStore):
         Returns:
             ``True`` on success.
         """
+        if not ids:
+            return True
         predicate = ibis._[self._id_column].isin(ids)
         if tx is not None:
             table = self._get_table(tx)
@@ -610,24 +633,27 @@ class VastDBVectorStore(VectorStore):
         columns: list[str],
         predicate: ibis.Expr | None,
     ) -> list[tuple[dict, float]]:
-        """In-memory dot-product fallback when ADBC is unavailable.
+        """In-memory L2-squared distance fallback when ADBC is unavailable.
 
-        Reads id + vector columns, ranks by dot product, then fetches full rows
-        for the top-k hits. Same two-phase pattern used in vast-pipelines.
+        Reads id + vector columns, ranks by L2-squared distance (lower=better,
+        matching the native path's ``$distance`` semantics), then fetches full
+        rows for the top-k hits.
         """
         table = self._get_table(tx)
         scan_columns = [self._id_column, self._vector_column]
         reader = table.select(predicate=predicate, columns=scan_columns)
         all_rows = reader.read_all().to_pylist()
 
+        qdim = len(query_vector)
         scored: list[tuple[str, float]] = []
         for row in all_rows:
             vec = row.get(self._vector_column)
-            if isinstance(vec, list):
-                score = sum(a * b for a, b in zip(query_vector, vec))
-                scored.append((row[self._id_column], score))
+            if not isinstance(vec, list) or len(vec) != qdim:
+                continue
+            score = sum((a - b) * (a - b) for a, b in zip(query_vector, vec))
+            scored.append((row[self._id_column], score))
 
-        scored.sort(key=lambda x: x[1], reverse=True)
+        scored.sort(key=lambda x: x[1])
         top_ids = [id_ for id_, _ in scored[:k]]
         top_scores = {id_: score for id_, score in scored[:k]}
 

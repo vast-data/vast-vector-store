@@ -16,7 +16,7 @@ so that I can trust it behaves identically to any other LangChain partner Vector
 
 2. **Given** the integration test setup
    **When** connection parameters are read
-   **Then** they are sourced exclusively from environment variables: `VASTDB_ENDPOINT`, `VASTDB_ACCESS_KEY`, `VASTDB_SECRET_KEY`, `VASTDB_TEST_BUCKET`, `VASTDB_TEST_SCHEMA` — no hardcoded values, no config files.
+   **Then** they are sourced exclusively from environment variables: `VASTDB__ENDPOINT`, `VASTDB__ACCESS_KEY`, `VASTDB__SECRET_KEY`, `VASTDB__BUCKET` (double-underscore naming matches the convention used in `vast-pipelines`) — no hardcoded values, no config files. The test schema name is auto-generated per test run; callers do not pass a schema env var.
 
 3. **Given** the integration test lifecycle
    **When** each test runs
@@ -117,8 +117,8 @@ Read from `os.environ` at module import time via a helper. If any are missing, s
 
 ```python
 REQUIRED_ENV = [
-    "VASTDB_ENDPOINT", "VASTDB_ACCESS_KEY", "VASTDB_SECRET_KEY",
-    "VASTDB_TEST_BUCKET", "VASTDB_TEST_SCHEMA",
+    "VASTDB__ENDPOINT", "VASTDB__ACCESS_KEY", "VASTDB__SECRET_KEY",
+    "VASTDB__BUCKET",
 ]
 _missing = [k for k in REQUIRED_ENV if not os.environ.get(k)]
 pytestmark = pytest.mark.skipif(
@@ -127,7 +127,7 @@ pytestmark = pytest.mark.skipif(
 )
 ```
 
-This pattern means local devs without cluster access still get a green `pytest` run (module skipped), while CI with env vars runs the full suite.
+This pattern means local devs without cluster access still get a green `pytest` run (module skipped), while CI with env vars runs the full suite. Env var names use the double-underscore convention shared with `vast-pipelines`. The test schema is auto-generated (`f"lc_vs_it_{uuid.uuid4().hex[:12]}"`) — no `VASTDB__SCHEMA` env var is required or consulted.
 
 ### Test table lifecycle — per-test isolation
 
@@ -308,3 +308,34 @@ Claude Sonnet 4 (claude-sonnet-4-6)
 - [ ] [Review][Patch] AI-2 xfail missing `strict=True` [tests/integration_tests/test_vectorstore.py:116] — applied: strict=True added so xpass (when AI-2 bug is fixed) correctly fails the suite and prompts removal of the xfail marker.
 - [x] [Review][Defer] `from vastdb._internal import VectorIndexSpec` uses private API [tests/integration_tests/test_vectorstore.py:12] — deferred, pre-existing SDK limitation (VectorIndexSpec not exported from vastdb public API)
 - [x] [Review][Defer] Idempotent-insert tests may fail if VastDB `insert` allows duplicate rows [tests/integration_tests/test_vectorstore.py] — deferred, requires live-cluster verification; VastDB insert semantics unknown without running against real cluster
+
+### Review Findings (2026-04-13, fix/3-1-live-cluster-validation)
+
+#### Decision-needed (spec deviations introduced by live-cluster fix commits)
+
+- [x] [Review][Decision] Env var naming diverges from spec (AC #2) — **Resolved**: ratified `VASTDB__*` (double-underscore) convention to match `vast-pipelines`. AC #2 in this story and the epics.md AC for Story 3.1 updated accordingly.
+- [x] [Review][Decision] `conftest.py` exists — **Resolved**: `conftest.py` deleted. Env var loading is now the caller's responsibility (IDE run config, `direnv`, or `set -a && source .env && set +a`); documented in the `vectorstore` fixture docstring.
+- [x] [Review][Decision] `python-dotenv` added to `pyproject.toml` dev deps — **Resolved**: removed from `[dependency-groups] dev`; `uv sync` confirms uninstall.
+- [x] [Review][Decision] `VASTDB_TEST_SCHEMA` env var from AC #2 not honored — **Resolved**: AC #2 updated. The test fixture always auto-generates `f"lc_vs_it_{uuid.uuid4().hex[:12]}"` as the schema name; no env var read. `VastDBVectorStore` still receives a schema name via its constructor arg (unchanged).
+- [x] [Review][Decision] Production class `src/langchain_vastdb/vectorstores.py` modified despite "frozen for Epic 3" rule — **Resolved (option b)**: the seven production fixes plus this review's additional patches have been moved into a new named story, `3-1a-live-cluster-correctness-fixes.md` (status: `review`). Story 3.1 remains scoped to the test-suite + CI work. The "frozen" rule is upheld by traceability: Story 3.1a owns the production diff and will run live-cluster re-validation (blocked on v74 cluster availability).
+
+#### Patch (unambiguous bug fixes)
+
+- [x] [Review][Patch] CRITICAL: `_do_vector_search_fallback` uses dot-product while primary path returns L2-squared distance [src/langchain_vastdb/vectorstores.py] — applied: fallback now computes `sum((a-b)**2 ...)` L2-squared distance and sorts ascending (lower=better), matching the native `$distance` semantics.
+- [x] [Review][Patch] CRITICAL: `add_texts([])` can delete all rows [src/langchain_vastdb/vectorstores.py] — applied: `add_texts` early-returns `[]` when `texts_list` is empty; `_delete_by_ids` guards `if not ids: return True` at entry; `_insert_vectors` early-returns `ids` when `not embeddings`.
+- [x] [Review][Patch] HIGH: Upsert path runs delete round-trip even for pure inserts [src/langchain_vastdb/vectorstores.py] — applied: `add_texts` now tracks `ids_provided = ids is not None` and skips `_delete_by_ids` when the caller did not supply IDs.
+- [ ] [Review][Patch] HIGH: Fallback vector scan has no row limit [src/langchain_vastdb/vectorstores.py:620] — left as action item: design-level change (top-k heap / chunked streaming) needs a judgment call on fallback positioning (dev-only vs. production fallback). Skipped from batch apply.
+- [x] [Review][Patch] HIGH: VectorIndex fallback hardcodes `l2sq` regardless of cluster metric [src/langchain_vastdb/vectorstores.py] — applied: added warning log when the fallback fires; comment documents the silent-wrong-results risk if the real index uses a different metric. A follow-up could surface a constructor arg to pin the metric.
+- [x] [Review][Patch] MEDIUM: `zip(query_vector, vec)` silently truncates on dim mismatch [src/langchain_vastdb/vectorstores.py] — applied: fallback now skips rows whose vector length does not equal `len(query_vector)`.
+- [x] [Review][Patch] MEDIUM: `_insert_vectors` with empty embeddings creates a size-0 fixed-list type [src/langchain_vastdb/vectorstores.py] — applied: early-return `ids` before building the PyArrow batch.
+- [x] [Review][Patch] MEDIUM: `conftest.py` crashes test collection if `python-dotenv` missing [conftest.py] — applied: `dotenv` import wrapped in `try/except ImportError`.
+- [x] [Review][Patch] LOW: `.gitignore` pattern `/.env` is anchored to repo root only [.gitignore] — applied: changed to `.env` so any `.env` file in the tree is ignored.
+- [x] [Review][Patch] LOW: `VECTOR_DIM = 6` hardcoded [tests/integration_tests/test_vectorstore.py] — applied: now imports `EMBEDDING_SIZE` from `langchain_tests.integration_tests.vectorstores` and aliases to `VECTOR_DIM`.
+
+#### Deferred (pre-existing or out-of-scope)
+
+- [x] [Review][Defer] AI-2 `json.loads(None)` on NULL metadata [src/langchain_vastdb/vectorstores.py:668] — already tracked in deferred-work.md as xfail test; proposed fix documented.
+- [x] [Review][Defer] `_metadata_loaded` not thread-safe [src/langchain_vastdb/vectorstores.py:205-216] — already deferred from Story 2.1 review; VastDB SDK is sync-only so benign today.
+- [x] [Review][Defer] `_delete_by_ids` / `_insert_vectors` subclass-override `tx` contract unenforced [src/langchain_vastdb/vectorstores.py:272] — subclasses that ignore the `tx` kwarg break upsert atomicity silently. Document in the hook API contract and defer to a future refactor.
+- [x] [Review][Defer] Elysium (sorted) tables use `decimal128(38,0)` for `$row_id` instead of `uint64` [src/langchain_vastdb/vectorstores.py:441-444] — potential type mismatch in `table.delete(rows)` for sorted tables. Corner case; vector tables are typically unsorted. Defer until Elysium compatibility is in scope.
+- [x] [Review][Defer] Private SDK imports `vastdb._adbc.AdbcDriver`, `vastdb._internal.VectorIndexSpec` [tests/integration_tests/test_vectorstore.py:11-12] — already tracked from the yolo-run review; no public API alternative.
