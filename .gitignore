@@ -13,3 +13,6 @@ build/
 .coverage
 htmlcov/
 .env
+
+# UV specific
+uv.lock
