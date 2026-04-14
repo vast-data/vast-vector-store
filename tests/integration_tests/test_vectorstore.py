@@ -11,7 +11,6 @@ from langchain_core.vectorstores import VectorStore
 from langchain_tests.integration_tests import VectorStoreIntegrationTests
 from langchain_tests.integration_tests.vectorstores import EMBEDDING_SIZE
 from vastdb._adbc import AdbcDriver
-from vastdb._internal import VectorIndexSpec
 from vastdb.config import BackoffConfig
 
 from langchain_vastdb import VastDBVectorStore
@@ -99,11 +98,7 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
         with session.transaction() as tx:
             b = tx.bucket(bucket)
             b.create_schema(schema)
-            b.schema(schema).create_table(
-                table_name,
-                _ARROW_SCHEMA,
-                vector_index=VectorIndexSpec("vector", "l2sq"),
-            )
+            b.schema(schema).create_table(table_name, _ARROW_SCHEMA)
 
         store = VastDBVectorStore(
             embedding=self.get_embeddings(),

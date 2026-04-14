@@ -34,6 +34,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "langchain-tests>=1.1,<2",
+    "python-dotenv",
 ]
 
 [tool.hatch.build]

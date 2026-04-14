@@ -1,0 +1,19 @@
+version: '3'
+
+dotenv: ['.env']
+
+tasks:
+  test:integration:
+    desc: Run integration tests against the live VAST cluster (reads creds from .env)
+    cmds:
+      - uv run pytest tests/integration_tests/ -v {{.CLI_ARGS}}
+
+  test:unit:
+    desc: Run unit tests (no cluster required)
+    cmds:
+      - uv run pytest tests/unit_tests/ -v {{.CLI_ARGS}}
+
+  test:all:
+    desc: Run all tests
+    cmds:
+      - uv run pytest tests/ -v {{.CLI_ARGS}}
