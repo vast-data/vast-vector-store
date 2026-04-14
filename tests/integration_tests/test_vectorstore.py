@@ -10,7 +10,6 @@ import vastdb
 from langchain_core.vectorstores import VectorStore
 from langchain_tests.integration_tests import VectorStoreIntegrationTests
 from langchain_tests.integration_tests.vectorstores import EMBEDDING_SIZE
-from vastdb._adbc import AdbcDriver
 from vastdb.config import BackoffConfig
 
 from langchain_vastdb import VastDBVectorStore
@@ -86,7 +85,9 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
 
         adbc_driver_path = os.environ.get("VASTDB__ADBC_DRIVER_PATH")
         adbc_endpoint = os.environ.get("VASTDB__ADBC_ENDPOINT")
-        adbc_driver = AdbcDriver.from_local_path(adbc_driver_path) if adbc_driver_path else None
+        # Note: adbc_driver is NOT passed to vastdb.connect() — the SDK would route
+        # it through the HTTPS endpoint (TLS issues). VastDBVectorStore opens its own
+        # ADBC connection directly to adbc_endpoint (the QueryEngine IP).
         session = vastdb.connect(
             endpoint=endpoint,
             access=access_key,
@@ -94,7 +95,6 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
             timeout=10,
             ssl_verify=False,
             backoff_config=BackoffConfig(max_tries=2, max_time=15.0),
-            adbc_driver=adbc_driver,
         )
 
         with session.transaction() as tx:
