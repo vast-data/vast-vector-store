@@ -52,9 +52,13 @@ unit-test:
   allow_failure: true
   script:
     - uv sync --locked
-    - uv run pytest tests/unit_tests/ -v
+    - uv run pytest tests/unit_tests/ -v --junitxml=report.xml
   after_script:
     - uv cache prune --ci
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
 
 # -- Integration tests: real VAST cluster --
 integration-test:
@@ -69,36 +73,27 @@ integration-test:
       paths:
         - ${UV_CACHE_DIR}
   script:
+    - apt-get update -qq && apt-get install -y -qq sshpass
     - uv sync --locked
-    # Download the ADBC native driver from Artifactory and expose it to the test
-    # process so VastDB can use native vector search when the cluster supports it.
-    # Falls back gracefully to in-memory L2Sq when ADBC is unavailable or the
-    # table has no vector index (current behaviour on VAST 5.4/5.5).
+    # SSH tunnel + tests in one shell so the exported env var is visible to pytest.
     - |
-      ADBC_SO=/tmp/libadbc_driver_vastdb.so
-      LATEST_BUILD=$(curl -fsSL https://artifactory.vastdata.com/artifactory/files/vastdb-native-client/ \
-        | grep -o 'href="[0-9]*/"' | grep -o '[0-9]*' | sort -n | tail -1)
-      echo "Downloading ADBC driver from build ${LATEST_BUILD}"
-      curl -fsSL \
-        "https://artifactory.vastdata.com/artifactory/files/vastdb-native-client/${LATEST_BUILD}/libadbc_driver_vastdb.so" \
-        -o "${ADBC_SO}" && export VASTDB__ADBC_DRIVER_PATH="${ADBC_SO}" \
-        || echo "ADBC driver download failed — vector search will use in-memory fallback"
-    - uv run pytest tests/integration_tests/ -v
+      bash scripts/ci-tunnel.sh
+      export VASTDB__ENDPOINT="https://localhost:18151"
+      uv run pytest tests/integration_tests/ -v -rs --log-cli-level=WARNING --junitxml=report.xml
   after_script:
     - uv cache prune --ci
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
   # Required CI/CD variables (Settings → CI/CD → Variables):
-  #   VASTDB__ENDPOINT      — HTTP endpoint reachable from the runner, e.g. https://10.x.x.x:8080
-  #                           (not localhost — the runner is a separate machine)
-  #   VASTDB__ACCESS_KEY    — S3-style access key
-  #   VASTDB__SECRET_KEY    — S3-style secret key  (mark as Masked)
-  #   VASTDB__BUCKET        — bucket name, e.g. "omer-test-db"
-  #
-  # Optional — enables native ADBC vector search via array_distance() SQL:
-  #   VASTDB__ADBC_ENDPOINT — QueryEngine hostname/IP, e.g. "172.27.74.17"
-  #                           (separate from the HTTP endpoint; see cluster.env)
-  #
-  # The ADBC .so is downloaded automatically from Artifactory (see script above).
-  # If VASTDB__ADBC_ENDPOINT is not set, vector search falls back to in-memory L2Sq.
+  #   VASTDB__ENDPOINT          — cluster host:port (tunnel target), e.g. "172.27.151.2:443"
+  #   VASTDB__SSH_JUMP_HOST     — SSH jump host IP/hostname, e.g. "10.141.200.151"
+  #   VASTDB__ENDPOINT_USERNAME — SSH username on the jump host, e.g. "vastdata"
+  #   VASTDB__ENDPOINT_PASSWORD — SSH password for the jump host (mark as Masked)
+  #   VASTDB__ACCESS_KEY        — S3-style access key
+  #   VASTDB__SECRET_KEY        — S3-style secret key (mark as Masked)
+  #   VASTDB__BUCKET            — bucket name, e.g. "omer-test-db"
 
 # -- Publish to PyPI: only on version tags --
 # NOTE: Before first publish, register this project as a trusted publisher

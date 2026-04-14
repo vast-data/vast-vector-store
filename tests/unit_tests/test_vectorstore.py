@@ -208,14 +208,9 @@ def test_add_texts_defaults_empty_metadata_when_none(vectorstore):
 
 
 def test_similarity_search_returns_list_of_documents(vectorstore, mock_transaction):
-    mock_table = mock_transaction.table_from_metadata.return_value
-    mock_reader = MagicMock()
-    mock_reader.read_all.return_value.to_pylist.return_value = [
-        {"id": "1", "text": "hello", "metadata": '{"k": "v"}', "$distance": 0.5},
-    ]
-    mock_table.vector_search.return_value = mock_reader
-
-    results = vectorstore.similarity_search("hello")
+    row = {"id": "1", "text": "hello", "metadata": '{"k": "v"}'}
+    with patch.object(vectorstore, "_do_vector_search", return_value=[(row, 0.5)]):
+        results = vectorstore.similarity_search("hello")
 
     assert isinstance(results, list)
     assert len(results) == 1
@@ -226,14 +221,9 @@ def test_similarity_search_returns_list_of_documents(vectorstore, mock_transacti
 def test_similarity_search_with_score_returns_tuples_with_float_scores(
     vectorstore, mock_transaction
 ):
-    mock_table = mock_transaction.table_from_metadata.return_value
-    mock_reader = MagicMock()
-    mock_reader.read_all.return_value.to_pylist.return_value = [
-        {"id": "1", "text": "hello", "metadata": "{}", "$distance": 0.3},
-    ]
-    mock_table.vector_search.return_value = mock_reader
-
-    results = vectorstore.similarity_search_with_score("hello")
+    row = {"id": "1", "text": "hello", "metadata": "{}"}
+    with patch.object(vectorstore, "_do_vector_search", return_value=[(row, 0.3)]):
+        results = vectorstore.similarity_search_with_score("hello")
 
     assert isinstance(results, list)
     assert len(results) == 1
@@ -246,29 +236,22 @@ def test_similarity_search_with_score_returns_tuples_with_float_scores(
 def test_similarity_search_by_vector_skips_embed_query(
     vectorstore, mock_transaction, fake_embedding
 ):
-    mock_table = mock_transaction.table_from_metadata.return_value
-    mock_reader = MagicMock()
-    mock_reader.read_all.return_value.to_pylist.return_value = [
-        {"id": "1", "text": "hello", "metadata": "{}", "$distance": 0.1},
-    ]
-    mock_table.vector_search.return_value = mock_reader
-
-    # DeterministicFakeEmbedding is a frozen Pydantic model; patch at class level
-    with patch.object(DeterministicFakeEmbedding, "embed_query") as mock_embed_query:
-        vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3])
-        mock_embed_query.assert_not_called()
+    with patch.object(vectorstore, "_do_vector_search", return_value=[]):
+        # DeterministicFakeEmbedding is a frozen Pydantic model; patch at class level
+        with patch.object(DeterministicFakeEmbedding, "embed_query") as mock_embed_query:
+            vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3])
+            mock_embed_query.assert_not_called()
 
 
 def test_similarity_search_passes_filter_as_ibis_predicate(vectorstore, mock_transaction):
-    mock_table = mock_transaction.table_from_metadata.return_value
-    mock_reader = MagicMock()
-    mock_reader.read_all.return_value.to_pylist.return_value = []
-    mock_table.vector_search.return_value = mock_reader
+    with patch.object(vectorstore, "_do_vector_search", return_value=[]) as mock_search:
+        vectorstore.similarity_search("hello", filter={"category": "news"})
 
-    vectorstore.similarity_search("hello", filter={"category": "news"})
-
-    call_kwargs = mock_table.vector_search.call_args.kwargs
-    assert call_kwargs.get("predicate") is not None
+    args = mock_search.call_args.args  # (tx, query_vector, k, columns, predicate, filter_dict)
+    predicate = args[4]
+    filter_dict = args[5]
+    assert predicate is not None
+    assert filter_dict == {"category": "news"}
 
 
 def test_row_to_document_deserializes_json_metadata(vectorstore):
@@ -400,16 +383,9 @@ def test_similarity_search_with_score_uses_overridden_row_to_document(
         schema="s",
         table_name="t",
     )
-    store._table_metadata = MagicMock()
-    mock_table = MagicMock()
-    mock_transaction.table_from_metadata.return_value = mock_table
-    mock_reader = MagicMock()
-    mock_reader.read_all.return_value.to_pylist.return_value = [
-        {"id": "1", "text": "hello", "metadata": "{}", "$distance": 0.7},
-    ]
-    mock_table.vector_search.return_value = mock_reader
-
-    results = store.similarity_search_with_score("hello")
+    row = {"id": "1", "text": "hello", "metadata": "{}"}
+    with patch.object(store, "_do_vector_search", return_value=[(row, 0.7)]):
+        results = store.similarity_search_with_score("hello")
     doc, score = results[0]
     assert score == pytest.approx(0.7)
     assert doc.metadata.get("score") == pytest.approx(0.7)
