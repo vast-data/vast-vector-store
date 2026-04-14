@@ -57,9 +57,25 @@ Target after these fixes (when the v74 cluster is available again): **15 passed,
    **When** they run against this branch,
    **Then** both exit `0` with zero warnings and 29/29 unit tests pass.
 
-10. **Given** the v74 integration cluster is available,
-    **When** `uv run pytest tests/integration_tests/ -v` runs,
-    **Then** the suite reports 15 passed, 12 skipped, 1 xfailed, 0 failed, 0 errors. (Cannot be executed now — v74 cluster is down.)
+10. **Given** a reachable VAST integration cluster (originally v74, re-targeted to v151 after v74 was decommissioned),
+    **When** `uv run pytest tests/integration_tests/ -v` runs **in CI** via the GitLab pipeline,
+    **Then** the suite reports 15 passed, 12 skipped, 1 xfailed, 0 failed, 0 errors against the live cluster. (Satisfied on pipeline #55, branch `fix/3-1-live-cluster-validation`.)
+
+11. **Given** the GitLab runner cannot route directly to the VAST cluster subnet,
+    **When** the `integration-test` job starts,
+    **Then** `scripts/ci-tunnel.sh` opens two `sshpass`-backed SSH tunnels via the jump host (REST API `localhost:18151 → 172.27.151.2:443`, ADBC QueryEngine `localhost:18080 → 172.27.151.17:80`) so the test process can reach both endpoints as `localhost`.
+
+12. **Given** the ADBC driver is a Linux-only `.so` published to Artifactory,
+    **When** the CI job runs on Linux,
+    **Then** the driver is downloaded from `https://artifactory.vastdata.com/artifactory/files/vastdb-native-client/`, `VASTDB__ADBC_DRIVER_PATH` + `VASTDB__ADBC_ENDPOINT` are exported, and the native `array_distance()` search path is exercised (not the in-memory fallback). On macOS developer machines the `.so` is absent and the fallback path is used — documented, not a regression.
+
+13. **Given** `_do_vector_search_adbc` builds a parameterized SQL query,
+    **When** the query runs against VAST's DuckDB dialect,
+    **Then** (a) the `vector` column is quoted as `"vector"::FLOAT[n]` because `vector` is a reserved type keyword, and (b) embedding components are coerced via `[float(x) for x in query_vector]` so numpy 2.x `np.float64` values do not format as `np.float64(...)` literals in the generated SQL.
+
+14. **Given** the shared `vastdb.connect()` session opened by the test fixture,
+    **When** the fixture is constructed,
+    **Then** it does **not** pass `adbc_driver=...` to `vastdb.connect()` (the SDK would route ADBC through the HTTPS REST endpoint and hit a TLS error against the self-signed cluster cert). `VastDBVectorStore` opens its own ADBC connection directly to the QueryEngine plain-HTTP endpoint via `VASTDB__ADBC_ENDPOINT`.
 
 ## Tasks / Subtasks
 
@@ -97,9 +113,26 @@ Target after these fixes (when the v74 cluster is available again): **15 passed,
   - [x] `uv run ruff check .` passes with zero warnings.
   - [x] `uv run pytest tests/unit_tests/` reports 29/29 passed.
 
-- [ ] **Task 8: Live-cluster re-validation (AC #10)**
-  - [ ] When the v74 cluster is back, run `uv run pytest tests/integration_tests/ -v` and attach the summary to the Dev Agent Record below.
-  - [ ] Confirm 15 passed / 12 skipped / 1 xfailed / 0 failed / 0 errors.
+- [x] **Task 8: Live-cluster re-validation (AC #10)**
+  - [x] v74 was decommissioned; re-targeted to v151 and executed under CI rather than a local run.
+  - [x] Pipeline #55 on `fix/3-1-live-cluster-validation` reports **15 passed / 12 skipped / 1 xfailed / 0 failed / 0 errors**.
+
+- [x] **Task 9: CI SSH tunnel to reach the cluster (AC #11)** — commit `1280aaf`
+  - [x] Add `scripts/ci-tunnel.sh` opening REST API + ADBC QueryEngine tunnels via the jump host with `sshpass`.
+  - [x] Wire the script into `.gitlab-ci.yml` `integration-test` job; export `VASTDB__ENDPOINT=https://localhost:18151` and `VASTDB__ADBC_ENDPOINT=http://localhost:18080`.
+  - [x] Add `--junitxml=report.xml` + `artifacts.reports.junit` so the GitLab Tests tab is populated and ADBC fallback warnings are visible in CI logs.
+
+- [x] **Task 10: ADBC SQL dialect fixes in `_do_vector_search_adbc` (AC #13)** — commit `ccc0726`
+  - [x] Quote the reserved `vector` column name (`"vector"::FLOAT[n]`) in the generated SQL.
+  - [x] Coerce `query_vector` elements through `float(...)` to avoid numpy 2.x `np.float64(x)` repr leaking into the SQL literal.
+
+- [x] **Task 11: Test fixture — don't hand `adbc_driver` to `vastdb.connect()` (AC #14)** — commit `b86b8fd`
+  - [x] Remove the `adbc_driver=adbc_driver` kwarg from the shared-session `vastdb.connect()` call in `tests/integration_tests/test_vectorstore.py`.
+  - [x] Document in the fixture docstring that `VastDBVectorStore` opens its own ADBC connection via `VASTDB__ADBC_ENDPOINT`.
+
+- [x] **Task 12: ADBC driver provisioning on CI (AC #12)** — part of commit `1280aaf`/`b954eeb`
+  - [x] CI job downloads the Linux `.so` from `https://artifactory.vastdata.com/artifactory/files/vastdb-native-client/` and exports `VASTDB__ADBC_DRIVER_PATH`.
+  - [x] Native `array_distance()` path is exercised on CI; macOS dev still falls back in-memory.
 
 ## Dev Notes
 
@@ -132,7 +165,11 @@ The following items from the Story 3.1 code review remain open and are tracked i
 
 ### File List
 
-- `src/langchain_vastdb/vectorstores.py` — modified: seven fixes listed in ACs #1–#8 plus the warning log.
+- `src/langchain_vastdb/vectorstores.py` — modified: seven correctness fixes (ACs #1–#8) plus the warning log, plus ADBC SQL dialect fixes in `_do_vector_search_adbc` (AC #13).
+- `scripts/ci-tunnel.sh` — new: opens REST API + ADBC QueryEngine SSH tunnels via the jump host (AC #11).
+- `.gitlab-ci.yml` — modified: integration-test job wires in the tunnel, downloads the ADBC driver, exports `VASTDB__*` env vars, emits JUnit XML (ACs #11, #12).
+- `tests/integration_tests/test_vectorstore.py` — modified: fixture no longer passes `adbc_driver` into `vastdb.connect()` (AC #14).
+- `.gitignore` — modified: broadened `/.env` to `.env` so `.env` files in subdirectories are also ignored.
 
 ### Testing standards
 
@@ -157,7 +194,13 @@ Claude Sonnet 4.6 (code review batch-apply)
   - Warning log when the VectorIndex `l2sq` fallback fires.
 - `uv run ruff check .` — PASS (zero warnings).
 - `uv run pytest tests/unit_tests/` — 29/29 passed, no regressions.
-- **Live-cluster re-validation blocked** — v74 cluster is currently down. Task 8 remains open until the cluster is back and integration tests can be re-run.
+- **Live-cluster re-validation unblocked** — v74 was decommissioned so the run was re-targeted to v151 and executed under CI instead of locally. GitLab pipeline #55 on `fix/3-1-live-cluster-validation` reports 15 passed / 12 skipped / 1 xfailed / 0 failed / 0 errors.
+- **Post-review plumbing work folded into this story (Tasks 9–12, ACs #11–#14)** — after the initial review batch-apply at `1447aa5`, additional work was needed to make the live-cluster run happen at all:
+  - CI SSH tunnel to reach the cluster subnet from the GitLab runner (`scripts/ci-tunnel.sh`, `.gitlab-ci.yml`) — commit `1280aaf`.
+  - ADBC SQL dialect fixes (reserved `vector` keyword quoting, numpy 2.x float coercion) in `_do_vector_search_adbc` — commit `ccc0726`.
+  - Test fixture: stopped passing `adbc_driver` into `vastdb.connect()` (TLS error via REST endpoint) — commit `b86b8fd`.
+  - ADBC driver provisioning from Artifactory on CI — part of `1280aaf`/`b954eeb`.
+  These were not anticipated at `1447aa5` and were implemented without BMad routing at the time. They are now reconciled here so Story 3.1a captures the full scope before code review.
 
 ### File List
 
