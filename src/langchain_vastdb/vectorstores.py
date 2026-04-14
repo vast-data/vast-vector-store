@@ -702,10 +702,14 @@ class VastDBVectorStore(VectorStore):
         where_clause = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
         # Step 1: ADBC SQL — fetch id + distance only (no heavy columns).
+        # Cast to plain float to avoid np.float64(...) in the SQL literal.
+        float_vec = [float(x) for x in query_vector]
+        # Quote the vector column — "vector" is a reserved type keyword in VAST's DuckDB dialect.
+        quoted_vec_col = f'"{self._vector_column}"'
         query = (
             f"SELECT {self._id_column}, "
-            f"array_distance({self._vector_column}::FLOAT[{dim}], "
-            f"ARRAY{query_vector}::FLOAT[{dim}]) AS distance "
+            f"array_distance({quoted_vec_col}::FLOAT[{dim}], "
+            f"ARRAY{float_vec}::FLOAT[{dim}]) AS distance "
             f"FROM {table_path} "
             f"{where_clause} "
             f"ORDER BY distance "
