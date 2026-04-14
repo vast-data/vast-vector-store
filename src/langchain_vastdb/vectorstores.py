@@ -70,6 +70,10 @@ class VastDBVectorStore(VectorStore):
         text_column: str = "text",
         vector_column: str = "vector",
         metadata_column: str = "metadata",
+        adbc_driver_path: str | None = None,
+        adbc_endpoint: str | None = None,
+        access_key: str | None = None,
+        secret_key: str | None = None,
     ) -> None:
         """Initialize VastDBVectorStore with a pre-built session.
 
@@ -83,6 +87,18 @@ class VastDBVectorStore(VectorStore):
             text_column: Column name for document text. Defaults to ``"text"``.
             vector_column: Column name for embedding vectors. Defaults to ``"vector"``.
             metadata_column: Column name for document metadata. Defaults to ``"metadata"``.
+            adbc_driver_path: Path to ``libadbc_driver_vastdb.so``. When set
+                together with ``adbc_endpoint``, ``access_key``, and
+                ``secret_key``, enables native ADBC vector search via
+                ``array_distance()`` SQL (no vector index required). Falls back
+                to in-memory L2Sq scan when ADBC is unavailable or fails.
+            adbc_endpoint: ADBC/QueryEngine endpoint (hostname or IP), e.g.
+                ``"172.27.74.17"`` or ``"query-engine.platform.svc.cluster.local"``.
+                This is separate from the HTTP REST endpoint.
+            access_key: S3-style access key for the ADBC connection. Required
+                when ``adbc_driver_path`` is set.
+            secret_key: S3-style secret key for the ADBC connection. Required
+                when ``adbc_driver_path`` is set.
         """
         self._embedding = embedding
         self._session = session
@@ -91,6 +107,11 @@ class VastDBVectorStore(VectorStore):
         self._text_column = text_column
         self._vector_column = vector_column
         self._metadata_column = metadata_column
+
+        self._adbc_driver_path = adbc_driver_path
+        self._adbc_endpoint = adbc_endpoint
+        self._access_key = access_key
+        self._secret_key = secret_key
 
         self._table_ref = TableRef(bucket=bucket, schema=schema, table=table_name)
         self._table_metadata = TableMetadata(ref=self._table_ref)
@@ -106,6 +127,8 @@ class VastDBVectorStore(VectorStore):
         bucket: str,
         schema: str,
         table_name: str,
+        adbc_driver_path: str | None = None,
+        adbc_endpoint: str | None = None,
         **kwargs: Any,
     ) -> VastDBVectorStore:
         """Create a VastDBVectorStore from VAST connection parameters.
@@ -114,17 +137,18 @@ class VastDBVectorStore(VectorStore):
         internally from the provided credentials and endpoint, then
         delegates to the primary constructor.
 
-        Credentials are passed directly to ``vastdb.connect()`` and are
-        **not** stored as instance attributes.
-
         Args:
             embedding: The embeddings model used to generate vectors.
-            endpoint: The VAST cluster endpoint URL.
+            endpoint: The VAST cluster HTTP endpoint URL.
             access_key: The access key for authentication.
             secret_key: The secret key for authentication.
             bucket: The VAST bucket name containing the target table.
             schema: The schema name within the bucket.
             table_name: The table name to use for vector operations.
+            adbc_driver_path: Optional path to ``libadbc_driver_vastdb.so``
+                for native ADBC vector search.
+            adbc_endpoint: Optional ADBC/QueryEngine endpoint (separate from
+                the HTTP endpoint).
             **kwargs: Additional keyword arguments forwarded to ``__init__``
                 (e.g., custom column names).
 
@@ -140,6 +164,10 @@ class VastDBVectorStore(VectorStore):
             bucket=bucket,
             schema=schema,
             table_name=table_name,
+            adbc_driver_path=adbc_driver_path,
+            adbc_endpoint=adbc_endpoint,
+            access_key=access_key,
+            secret_key=secret_key,
             **kwargs,
         )
 
@@ -359,9 +387,10 @@ class VastDBVectorStore(VectorStore):
         Returns:
             List of Documents most similar to the query.
         """
+        filter_dict = kwargs.get("filter")
         query_vector = self._embedding.embed_query(query)
-        predicate = self._build_predicate(kwargs.get("filter"))
-        results = self._vector_search(query_vector, k, predicate=predicate)
+        predicate = self._build_predicate(filter_dict)
+        results = self._vector_search(query_vector, k, predicate=predicate, filter_dict=filter_dict)
         return [self._row_to_document(row) for row, _ in results]
 
     def similarity_search_with_score(
@@ -381,9 +410,10 @@ class VastDBVectorStore(VectorStore):
         Returns:
             List of (Document, distance_score) tuples, ordered by similarity.
         """
+        filter_dict = kwargs.get("filter")
         query_vector = self._embedding.embed_query(query)
-        predicate = self._build_predicate(kwargs.get("filter"))
-        results = self._vector_search(query_vector, k, predicate=predicate)
+        predicate = self._build_predicate(filter_dict)
+        results = self._vector_search(query_vector, k, predicate=predicate, filter_dict=filter_dict)
         return [(self._row_to_document(row, score), score) for row, score in results]
 
     def similarity_search_by_vector(
@@ -406,8 +436,9 @@ class VastDBVectorStore(VectorStore):
         Returns:
             List of Documents most similar to the embedding.
         """
-        predicate = self._build_predicate(kwargs.get("filter"))
-        results = self._vector_search(embedding, k, predicate=predicate)
+        filter_dict = kwargs.get("filter")
+        predicate = self._build_predicate(filter_dict)
+        results = self._vector_search(embedding, k, predicate=predicate, filter_dict=filter_dict)
         return [self._row_to_document(row) for row, _ in results]
 
     def delete(self, ids: list[str] | None = None, **kwargs: Any) -> bool | None:
@@ -552,24 +583,36 @@ class VastDBVectorStore(VectorStore):
             result = result & pred
         return result
 
+    def _adbc_available(self) -> bool:
+        """Return True when all four ADBC parameters are configured."""
+        return bool(
+            self._adbc_driver_path
+            and self._adbc_endpoint
+            and self._access_key
+            and self._secret_key
+        )
+
     def _vector_search(
         self,
         query_vector: list[float],
         k: int,
         predicate: ibis.Expr | None = None,
         *,
+        filter_dict: dict | None = None,
         tx: Transaction | None = None,
     ) -> list[tuple[dict, float]]:
         """Search VastDB for similar vectors.
 
-        Default hook implementation that calls ``table.vector_search()``
-        and returns row dicts with distance scores. Subclasses can override
-        this to customize search behavior (e.g., add collection filters).
+        Primary path: ADBC SQL with ``array_distance()`` (server-side, no
+        vector index required). Fallback: in-memory L2Sq scan. Subclasses
+        can override this hook to customise search behaviour.
 
         Args:
             query_vector: The query embedding vector.
             k: Maximum number of results to return.
-            predicate: Optional ibis predicate for filtering.
+            predicate: Optional ibis predicate for in-memory fallback filtering.
+            filter_dict: Optional raw filter dict used to build a SQL WHERE
+                clause for the ADBC path.
             tx: Optional transaction for reuse by subclasses.
 
         Returns:
@@ -577,10 +620,10 @@ class VastDBVectorStore(VectorStore):
         """
         columns = [self._id_column, self._text_column, self._metadata_column]
         if tx is not None:
-            return self._do_vector_search(tx, query_vector, k, columns, predicate)
+            return self._do_vector_search(tx, query_vector, k, columns, predicate, filter_dict)
 
         with self._session.transaction() as new_tx:
-            return self._do_vector_search(new_tx, query_vector, k, columns, predicate)
+            return self._do_vector_search(new_tx, query_vector, k, columns, predicate, filter_dict)
 
     def _do_vector_search(
         self,
@@ -589,41 +632,111 @@ class VastDBVectorStore(VectorStore):
         k: int,
         columns: list[str],
         predicate: ibis.Expr | None,
+        filter_dict: dict | None = None,
     ) -> list[tuple[dict, float]]:
         """Execute the vector search within a transaction.
 
-        Attempts native ``table.vector_search()`` via ADBC. Falls back to an
-        in-memory dot-product scan when ADBC is not available (e.g. on macOS
-        without the VAST ADBC shared library).
+        Tries ADBC ``array_distance()`` SQL first (no vector index required).
+        Falls back to an in-memory L2Sq scan when ADBC is not configured or
+        any ADBC error occurs.
 
         Args:
             tx: An active transaction.
             query_vector: The query embedding vector.
             k: Maximum number of results.
             columns: Column names to select.
-            predicate: Optional ibis predicate for filtering.
+            predicate: Optional ibis predicate for in-memory fallback filtering.
+            filter_dict: Optional raw filter dict for ADBC SQL WHERE clause.
 
         Returns:
             List of (row_dict, distance_score) tuples.
         """
-        from vastdb.transaction import NoAdbcConnectionError
+        if self._adbc_available():
+            try:
+                return self._do_vector_search_adbc(tx, query_vector, k, filter_dict)
+            except Exception as exc:
+                _logger.warning(
+                    "ADBC vector search failed (%s: %s); falling back to in-memory L2Sq scan.",
+                    type(exc).__name__,
+                    exc,
+                )
+        return self._do_vector_search_fallback(tx, query_vector, k, columns, predicate)
 
-        table = self._get_table(tx)
-        try:
-            reader = table.vector_search(
-                vec=query_vector,
-                columns=columns,
-                limit=k,
-                predicate=predicate,
-            )
-            rows = reader.read_all().to_pylist()
-            results: list[tuple[dict, float]] = []
-            for row in rows:
-                score = row.pop("$distance", 0.0)
-                results.append((row, score))
-            return results
-        except NoAdbcConnectionError:
-            return self._do_vector_search_fallback(tx, query_vector, k, columns, predicate)
+    def _do_vector_search_adbc(
+        self,
+        tx: Transaction,
+        query_vector: list[float],
+        k: int,
+        filter_dict: dict | None,
+    ) -> list[tuple[dict, float]]:
+        """ADBC vector search using ``array_distance()`` SQL (no index needed).
+
+        Mirrors the approach used in vast-pipelines: step 1 fetches only
+        ``id + distance`` via ADBC SQL (lightweight), step 2 retrieves the
+        full document columns for the top-k IDs via the VastDB SDK.
+
+        Args:
+            tx: An active VastDB transaction (used for step-2 row fetch).
+            query_vector: The query embedding vector.
+            k: Maximum number of results.
+            filter_dict: Optional dict of equality filters applied as a SQL
+                WHERE clause.
+
+        Returns:
+            List of (row_dict, distance_score) tuples ordered by distance.
+        """
+        from adbc_driver_manager import dbapi as adbc_dbapi
+
+        dim = len(query_vector)
+        table_path = (
+            f'"{self._table_ref.bucket}/{self._table_ref.schema}"'
+            f'."{self._table_ref.table}"'
+        )
+
+        # Build WHERE clause from simple equality filters.
+        where_parts: list[str] = []
+        if filter_dict:
+            for col, val in filter_dict.items():
+                quoted = f"'{val}'" if isinstance(val, str) else str(val)
+                where_parts.append(f"{col} = {quoted}")
+        where_clause = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+        # Step 1: ADBC SQL — fetch id + distance only (no heavy columns).
+        query = (
+            f"SELECT {self._id_column}, "
+            f"array_distance({self._vector_column}::FLOAT[{dim}], "
+            f"ARRAY{query_vector}::FLOAT[{dim}]) AS distance "
+            f"FROM {table_path} "
+            f"{where_clause} "
+            f"ORDER BY distance "
+            f"LIMIT {k}"
+        )
+        with adbc_dbapi.connect(
+            driver=self._adbc_driver_path,
+            db_kwargs={
+                "vast.db.endpoint": self._adbc_endpoint,
+                "vast.db.access_key": self._access_key,
+                "vast.db.secret_key": self._secret_key,
+            },
+        ) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(query)
+                result = cursor.fetch_arrow_table().to_pydict()
+
+        ids: list[str] = result.get(self._id_column, [])
+        distances: list[float] = result.get("distance", [])
+        if not ids:
+            return []
+
+        # Step 2: SDK — fetch full rows for the top-k IDs.
+        score_by_id = dict(zip(ids, distances))
+        full_rows = self._get_by_ids(ids, tx=tx)
+        row_by_id = {row[self._id_column]: row for row in full_rows}
+        return [
+            (row_by_id[id_], score_by_id[id_])
+            for id_ in ids
+            if id_ in row_by_id
+        ]
 
     def _do_vector_search_fallback(
         self,

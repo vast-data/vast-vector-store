@@ -71,9 +71,10 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
         yielding, and drops both unconditionally in the finally block.
 
         Required env vars: VASTDB__ENDPOINT, VASTDB__ACCESS_KEY, VASTDB__SECRET_KEY,
-        VASTDB__BUCKET. Optional: VASTDB__ADBC_DRIVER_PATH (path to local ADBC
-        shared library for macOS dev). Load env vars via your IDE's run config,
-        `direnv`, or a shell one-liner such as `set -a && source .env && set +a`.
+        VASTDB__BUCKET. Optional: VASTDB__ADBC_DRIVER_PATH + VASTDB__ADBC_ENDPOINT
+        enable native ADBC vector search via array_distance() SQL (no vector
+        index required). Load env vars via your IDE's run config, `direnv`, or
+        `set -a && source .env && set +a`.
         """
         endpoint = os.environ["VASTDB__ENDPOINT"]
         access_key = os.environ["VASTDB__ACCESS_KEY"]
@@ -84,6 +85,7 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
         table_name = f"lc_vs_it_{run_id}"
 
         adbc_driver_path = os.environ.get("VASTDB__ADBC_DRIVER_PATH")
+        adbc_endpoint = os.environ.get("VASTDB__ADBC_ENDPOINT")
         adbc_driver = AdbcDriver.from_local_path(adbc_driver_path) if adbc_driver_path else None
         session = vastdb.connect(
             endpoint=endpoint,
@@ -106,6 +108,10 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
             bucket=bucket,
             schema=schema,
             table_name=table_name,
+            adbc_driver_path=adbc_driver_path,
+            adbc_endpoint=adbc_endpoint,
+            access_key=access_key,
+            secret_key=secret_key,
         )
         try:
             yield store

@@ -70,12 +70,35 @@ integration-test:
         - ${UV_CACHE_DIR}
   script:
     - uv sync --locked
+    # Download the ADBC native driver from Artifactory and expose it to the test
+    # process so VastDB can use native vector search when the cluster supports it.
+    # Falls back gracefully to in-memory L2Sq when ADBC is unavailable or the
+    # table has no vector index (current behaviour on VAST 5.4/5.5).
+    - |
+      ADBC_SO=/tmp/libadbc_driver_vastdb.so
+      LATEST_BUILD=$(curl -fsSL https://artifactory.vastdata.com/artifactory/files/vastdb-native-client/ \
+        | grep -o 'href="[0-9]*/"' | grep -o '[0-9]*' | sort -n | tail -1)
+      echo "Downloading ADBC driver from build ${LATEST_BUILD}"
+      curl -fsSL \
+        "https://artifactory.vastdata.com/artifactory/files/vastdb-native-client/${LATEST_BUILD}/libadbc_driver_vastdb.so" \
+        -o "${ADBC_SO}" && export VASTDB__ADBC_DRIVER_PATH="${ADBC_SO}" \
+        || echo "ADBC driver download failed — vector search will use in-memory fallback"
     - uv run pytest tests/integration_tests/ -v
   after_script:
     - uv cache prune --ci
-  # These variables must be set at the GitLab project level:
-  # VASTDB__ENDPOINT, VASTDB__ACCESS_KEY, VASTDB__SECRET_KEY,
-  # VASTDB__BUCKET. Optional: VASTDB__SCHEMA (defaults to "test")
+  # Required CI/CD variables (Settings → CI/CD → Variables):
+  #   VASTDB__ENDPOINT      — HTTP endpoint reachable from the runner, e.g. https://10.x.x.x:8080
+  #                           (not localhost — the runner is a separate machine)
+  #   VASTDB__ACCESS_KEY    — S3-style access key
+  #   VASTDB__SECRET_KEY    — S3-style secret key  (mark as Masked)
+  #   VASTDB__BUCKET        — bucket name, e.g. "omer-test-db"
+  #
+  # Optional — enables native ADBC vector search via array_distance() SQL:
+  #   VASTDB__ADBC_ENDPOINT — QueryEngine hostname/IP, e.g. "172.27.74.17"
+  #                           (separate from the HTTP endpoint; see cluster.env)
+  #
+  # The ADBC .so is downloaded automatically from Artifactory (see script above).
+  # If VASTDB__ADBC_ENDPOINT is not set, vector search falls back to in-memory L2Sq.
 
 # -- Publish to PyPI: only on version tags --
 # NOTE: Before first publish, register this project as a trusted publisher
