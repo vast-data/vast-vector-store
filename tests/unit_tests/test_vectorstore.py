@@ -389,3 +389,184 @@ def test_similarity_search_with_score_uses_overridden_row_to_document(
     doc, score = results[0]
     assert score == pytest.approx(0.7)
     assert doc.metadata.get("score") == pytest.approx(0.7)
+
+
+# ---------------------------------------------------------------------------
+# Task 13b: Code-review patch backlog P1–P7 tests
+# ---------------------------------------------------------------------------
+
+# --- P3: len(ids) == len(texts) guard ---
+
+
+def test_add_texts_ids_length_mismatch_raises(vectorstore):
+    with pytest.raises(ValueError, match="ids length 1 != texts length 2"):
+        vectorstore.add_texts(["a", "b"], ids=["x"])
+
+
+# --- P4: k <= 0 guard ---
+
+
+def test_similarity_search_k_zero_raises(vectorstore):
+    with pytest.raises(ValueError, match="k must be a positive integer"):
+        vectorstore.similarity_search("q", k=0)
+
+
+def test_similarity_search_k_negative_raises(vectorstore):
+    with pytest.raises(ValueError, match="k must be a positive integer"):
+        vectorstore.similarity_search("q", k=-1)
+
+
+def test_similarity_search_by_vector_k_zero_raises(vectorstore):
+    with pytest.raises(ValueError, match="k must be a positive integer"):
+        vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3], k=0)
+
+
+# --- P5: NaN / inf guard ---
+
+
+def test_similarity_search_by_vector_nan_raises(vectorstore):
+    with pytest.raises(ValueError, match="non-finite"):
+        vectorstore.similarity_search_by_vector([float("nan"), 0.2, 0.3])
+
+
+def test_similarity_search_by_vector_inf_raises(vectorstore):
+    with pytest.raises(ValueError, match="non-finite"):
+        vectorstore.similarity_search_by_vector([0.1, float("inf"), 0.3])
+
+
+# --- P6: Duplicate IDs ---
+
+
+def test_add_texts_duplicate_ids_raises(vectorstore):
+    with pytest.raises(ValueError, match="Duplicate IDs"):
+        vectorstore.add_texts(["a", "b"], ids=["x", "x"])
+
+
+def test_add_texts_duplicate_ids_message_includes_dupe(vectorstore):
+    with pytest.raises(ValueError, match="x"):
+        vectorstore.add_texts(["a", "b", "c"], ids=["x", "y", "x"])
+
+
+# --- P1 + P7: _do_vector_search_adbc filter validation ---
+# These tests exercise validation that fires *before* any ADBC connection
+# is opened, so no mocking of adbc_driver_manager is needed.
+
+
+@pytest.fixture
+def adbc_vectorstore(mock_session, fake_embedding, mock_transaction):
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+        adbc_driver_path="/path/to/driver.so",
+        adbc_endpoint="localhost:8080",
+        access_key="ak",
+        secret_key="sk",
+    )
+    store._table_metadata = MagicMock()
+    mock_table = MagicMock()
+    mock_transaction.table_from_metadata.return_value = mock_table
+    return store
+
+
+def test_adbc_filter_invalid_column_raises(adbc_vectorstore, mock_transaction):
+    """P1: unknown column name in filter raises ValueError before any DB call."""
+    with pytest.raises(ValueError, match="not an allowed column"):
+        adbc_vectorstore._do_vector_search_adbc(
+            mock_transaction,
+            [0.1, 0.2, 0.3],
+            k=4,
+            filter_dict={"'; DROP TABLE x; --": "val"},
+        )
+
+
+def test_adbc_filter_none_value_raises(adbc_vectorstore, mock_transaction):
+    """P7: None filter value raises ValueError before any DB call."""
+    with pytest.raises(ValueError, match="is None"):
+        adbc_vectorstore._do_vector_search_adbc(
+            mock_transaction,
+            [0.1, 0.2, 0.3],
+            k=4,
+            filter_dict={"id": None},
+        )
+
+
+def test_adbc_filter_string_value_with_single_quote_is_escaped(
+    adbc_vectorstore, mock_transaction
+):
+    """P1: single quotes in string filter values are escaped (SQL injection prevention)."""
+    from unittest.mock import MagicMock
+
+    mock_dbapi = MagicMock()
+    _cm = mock_dbapi.connect.return_value.__enter__.return_value
+    mock_cursor = _cm.cursor.return_value.__enter__.return_value
+    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
+        "id": [],
+        "distance": [],
+    }
+
+    import sys
+
+    mock_adbc_module = MagicMock()
+    mock_adbc_module.dbapi = mock_dbapi
+
+    with patch.dict(
+        sys.modules,
+        {
+            "adbc_driver_manager": mock_adbc_module,
+        },
+    ):
+        adbc_vectorstore._do_vector_search_adbc(
+            mock_transaction,
+            [0.1, 0.2, 0.3],
+            k=4,
+            filter_dict={"id": "it's here"},
+        )
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert "it''s here" in executed_sql
+
+
+# --- P2: table path escaping ---
+
+
+def test_adbc_table_path_double_quotes_in_bucket_are_escaped(
+    mock_session, fake_embedding, mock_transaction
+):
+    """P2: double-quotes in bucket/schema/table names are doubled in the SQL path."""
+    from unittest.mock import MagicMock
+
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket='b"ucket',
+        schema="s",
+        table_name="t",
+        adbc_driver_path="/path/to/driver.so",
+        adbc_endpoint="localhost:8080",
+        access_key="ak",
+        secret_key="sk",
+    )
+    store._table_metadata = MagicMock()
+    mock_transaction.table_from_metadata.return_value = MagicMock()
+
+    mock_dbapi = MagicMock()
+    _cm2 = mock_dbapi.connect.return_value.__enter__.return_value
+    mock_cursor = _cm2.cursor.return_value.__enter__.return_value
+    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
+        "id": [],
+        "distance": [],
+    }
+
+    import sys
+
+    mock_adbc_module = MagicMock()
+    mock_adbc_module.dbapi = mock_dbapi
+
+    with patch.dict(sys.modules, {"adbc_driver_manager": mock_adbc_module}):
+        store._do_vector_search_adbc(mock_transaction, [0.1, 0.2, 0.3], k=4, filter_dict=None)
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert 'b""ucket' in executed_sql
