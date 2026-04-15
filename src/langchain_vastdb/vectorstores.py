@@ -652,9 +652,23 @@ class VastDBVectorStore(VectorStore):
             List of (row_dict, distance_score) tuples.
         """
         if self._adbc_available():
+            from vastdb.transaction import NoAdbcConnectionError
+
+            adbc_exc_types: tuple[type[BaseException], ...] = (
+                NoAdbcConnectionError,
+                ImportError,
+                OSError,
+            )
+            try:
+                from adbc_driver_manager import Error as _AdbcError
+
+                adbc_exc_types = adbc_exc_types + (_AdbcError,)
+            except ImportError:
+                pass
+
             try:
                 return self._do_vector_search_adbc(tx, query_vector, k, filter_dict)
-            except Exception as exc:
+            except adbc_exc_types as exc:
                 _logger.warning(
                     "ADBC vector search failed (%s: %s); falling back to in-memory L2Sq scan.",
                     type(exc).__name__,
