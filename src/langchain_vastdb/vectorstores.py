@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import uuid
+from collections import Counter
 from typing import TYPE_CHECKING, Any
 
 import ibis
@@ -301,6 +303,10 @@ class VastDBVectorStore(VectorStore):
         texts_list = list(texts)
         if not texts_list:
             return []
+        if ids is not None and len(ids) != len(texts_list):
+            raise ValueError(
+                f"ids length {len(ids)} != texts length {len(texts_list)}"
+            )
         vectors = self._embedding.embed_documents(texts_list)
         ids_provided = ids is not None
         if ids is None:
@@ -309,6 +315,10 @@ class VastDBVectorStore(VectorStore):
             # Replace per-element None with generated UUIDs (e.g. when
             # Document.id is None for some documents but not others).
             ids = [id_ if id_ is not None else str(uuid.uuid4()) for id_ in ids]
+        if ids_provided:
+            dupes = [id_ for id_, cnt in Counter(ids).items() if cnt > 1]
+            if dupes:
+                raise ValueError(f"Duplicate IDs in supplied ids: {dupes}")
         if metadatas is None:
             metadatas = [{} for _ in texts_list]
         with self._session.transaction() as tx:
@@ -387,6 +397,8 @@ class VastDBVectorStore(VectorStore):
         Returns:
             List of Documents most similar to the query.
         """
+        if k <= 0:
+            raise ValueError(f"k must be a positive integer, got {k}")
         filter_dict = kwargs.get("filter")
         query_vector = self._embedding.embed_query(query)
         predicate = self._build_predicate(filter_dict)
@@ -436,6 +448,10 @@ class VastDBVectorStore(VectorStore):
         Returns:
             List of Documents most similar to the embedding.
         """
+        if k <= 0:
+            raise ValueError(f"k must be a positive integer, got {k}")
+        if not all(math.isfinite(x) for x in embedding):
+            raise ValueError("query vector contains non-finite values")
         filter_dict = kwargs.get("filter")
         predicate = self._build_predicate(filter_dict)
         results = self._vector_search(embedding, k, predicate=predicate, filter_dict=filter_dict)
@@ -702,17 +718,39 @@ class VastDBVectorStore(VectorStore):
         from adbc_driver_manager import dbapi as adbc_dbapi
 
         dim = len(query_vector)
-        table_path = (
-            f'"{self._table_ref.bucket}/{self._table_ref.schema}"'
-            f'."{self._table_ref.table}"'
-        )
+        # Escape any embedded double-quotes in identifier components (P2).
+        bucket_esc = self._table_ref.bucket.replace('"', '""')
+        schema_esc = self._table_ref.schema.replace('"', '""')
+        table_esc = self._table_ref.table.replace('"', '""')
+        table_path = f'"{bucket_esc}/{schema_esc}"."{table_esc}"'
 
-        # Build WHERE clause from simple equality filters.
+        # Build WHERE clause from simple equality filters (P1, P7).
+        _allowed_cols = {
+            self._id_column,
+            self._text_column,
+            self._vector_column,
+            self._metadata_column,
+        }
         where_parts: list[str] = []
         if filter_dict:
             for col, val in filter_dict.items():
-                quoted = f"'{val}'" if isinstance(val, str) else str(val)
-                where_parts.append(f"{col} = {quoted}")
+                if col not in _allowed_cols:
+                    raise ValueError(
+                        f"filter key {col!r} is not an allowed column name; "
+                        f"allowed: {sorted(_allowed_cols)}"
+                    )
+                if val is None:
+                    raise ValueError(
+                        f"filter value for {col!r} is None; use IS NULL via a "
+                        "predicate or omit the key"
+                    )
+                if isinstance(val, str):
+                    escaped = val.replace("'", "''")
+                    quoted = f"'{escaped}'"
+                else:
+                    quoted = str(val)
+                quoted_col = f'"{col}"'
+                where_parts.append(f"{quoted_col} = {quoted}")
         where_clause = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
         # Step 1: ADBC SQL — fetch id + distance only (no heavy columns).
