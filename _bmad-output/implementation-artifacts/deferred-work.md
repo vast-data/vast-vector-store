@@ -37,3 +37,15 @@
 - `_metadata_loaded` flag remains without synchronization — re-raised after fix commits added the VectorIndex fallback write inside the same block. Still benign because VastDB SDK is sync-only, but now the cached state includes a potentially patched `_vector_index`, making any future async support more fragile.
 - `_delete_by_ids` / `_insert_vectors` hook contract: the base class now calls them with `tx=tx` to preserve upsert atomicity, but subclasses that override these methods without honoring the `tx` kwarg silently break atomicity. Document in the hook API contract and defer enforcement to a future refactor (e.g., make `tx` a positional required arg or validate at call site).
 - Elysium (sorted) tables use `decimal128(38,0)` for `$row_id` instead of `uint64`. The new `_delete_by_ids` path (`table.select(..., internal_row_id=True).read_all()` → `table.delete(rows)`) may type-mismatch for sorted tables. Vector tables are typically unsorted, so this is a corner case. Revisit when Elysium compatibility is in scope.
+
+## Deferred from: code review of story 3-1a-live-cluster-correctness-fixes (2026-04-15)
+
+- **DF1.** `_do_vector_search_fallback` reads the full table via `read_all().to_pylist()`. OOM risk on large tables. Needs a streaming top-k heap or a server-side `LIMIT` with a sampled scan.
+- **DF2.** `_do_vector_search_adbc` opens a fresh ADBC connection per call. Acceptable for test volume; not for production throughput. Pool or cache per-store.
+- **DF3.** Upsert atomicity depends on the SDK's transaction isolation level. If it is not serializable, concurrent writers can interleave between the delete and insert legs. Document the guarantee or pick a locking strategy.
+- **DF4.** CI stores `VASTDB__ENDPOINT_PASSWORD` as a plain GitLab variable. Rotate to masked/protected or move to a vault.
+- **DF5.** `sshpass` is apt-installed in CI without version pinning; supply-chain drift risk. Pin or vendor.
+- **DF6.** `ci-tunnel.sh` backgrounds `ssh -f -N` and returns immediately; tests can race the tunnel coming up. Add a `nc -z localhost 18151` readiness loop.
+- **DF7.** `_do_vector_search_fallback` silently skips dim-mismatched rows. A corrupted table would return "0 results" with no operator signal. Emit a counter + warning.
+- **DF8.** `VectorIndex` fallback hardcodes `l2sq`. If the real index on the table is cosine/dot-product, results are wrong and only a warning log fires. Consider a config override on the store.
+- **DF9.** SQL injection in `_do_vector_search_adbc` filter interpolation — listed here as a reminder that even after the P1 patch, the ADBC SQL path is still string-concatenation-based. A proper parameterized query API via the ADBC driver would be safer long-term.

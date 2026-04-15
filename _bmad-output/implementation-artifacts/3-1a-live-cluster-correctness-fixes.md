@@ -1,6 +1,6 @@
 # Story 3.1a: Live-Cluster Correctness Fixes for VastDBVectorStore
 
-Status: review
+Status: review-changes-requested
 
 ## Story
 
@@ -23,7 +23,7 @@ Target after these fixes (when the v74 cluster is available again): **15 passed,
 
 1. **Given** `_get_table` is called against a cluster version that does not return vector index metadata in table stats,
    **When** `_table_metadata._vector_index is None` after `load()`,
-   **Then** a `VectorIndex` object is constructed from the configured `vector_column` so that `table.vector_search()` can proceed, AND a `WARNING` log is emitted identifying the table and the hardcoded fallback metric so operators can detect mismatches.
+   **Then** a `VectorIndex` object is constructed from the configured `vector_column` so that downstream SDK calls (`table_from_metadata`) do not null-deref on the missing index, AND a `WARNING` log is emitted identifying the table and the hardcoded fallback metric so operators can detect mismatches. (Note: `VastDBVectorStore` no longer calls `table.vector_search()` — vector indexing is a VAST 5.5+ feature. The store's primary search path is ADBC SQL via `array_distance()`, with an in-memory L2Sq fallback. This AC remains only for SDK metadata-layer compatibility on pre-5.5 clusters.)
 
 2. **Given** `add_texts` is called with IDs supplied by the caller (via `ids=` or `Document.id` fields),
    **When** those IDs already exist in the table,
@@ -45,9 +45,9 @@ Target after these fixes (when the v74 cluster is available again): **15 passed,
    **When** the delete is executed,
    **Then** matching rows are selected with `internal_row_id=True`, and the resulting `RecordBatch` is passed to `table.delete(rows)` — `table.delete()` does not accept ibis predicates directly and the previous implementation using `table.delete(predicate)` was broken.
 
-7. **Given** `_do_vector_search` runs on a client where ADBC is unavailable (e.g. macOS dev without the VAST ADBC shared library),
-   **When** `table.vector_search()` raises `NoAdbcConnectionError`,
-   **Then** an in-memory L2-squared distance fallback runs (`_do_vector_search_fallback`), using the same distance metric and ordering as the native path (lower-is-better, ascending sort). Dim-mismatched rows are skipped; score semantics are consistent across code paths.
+7. **Given** `_do_vector_search` runs on a client where ADBC is unavailable (e.g. macOS dev without the VAST ADBC shared library, or CI where ADBC is intentionally not configured),
+   **When** either (a) `_adbc_available()` returns False because the ADBC env vars are unset, or (b) `_do_vector_search_adbc()` raises a known ADBC failure — `NoAdbcConnectionError`, `ImportError` (driver manager missing), or an `adbc_driver_manager.Error` subclass (connect/SQL failure),
+   **Then** an in-memory L2-squared distance fallback runs (`_do_vector_search_fallback`), using the same distance metric and ordering as the native path (lower-is-better, ascending sort). Dim-mismatched rows are skipped; score semantics are consistent across code paths. **The except clause is narrow, not `except Exception` — unknown/non-ADBC errors must propagate so real bugs are not silently swallowed into the fallback path.**
 
 8. **Given** a VAST row is converted to a `Document` via `_row_to_document`,
    **When** the `id` column is present in the row dict,
@@ -63,11 +63,11 @@ Target after these fixes (when the v74 cluster is available again): **15 passed,
 
 11. **Given** the GitLab runner cannot route directly to the VAST cluster subnet,
     **When** the `integration-test` job starts,
-    **Then** `scripts/ci-tunnel.sh` opens two `sshpass`-backed SSH tunnels via the jump host (REST API `localhost:18151 → 172.27.151.2:443`, ADBC QueryEngine `localhost:18080 → 172.27.151.17:80`) so the test process can reach both endpoints as `localhost`.
+    **Then** `scripts/ci-tunnel.sh` opens a single `sshpass`-backed SSH tunnel via the jump host (REST API `localhost:18151 → 172.27.151.2:443`) so the test process can reach the REST endpoint as `localhost`. (Tunneling the ADBC QueryEngine was attempted but abandoned: the full ADBC path from CI requires ~16 tunnel legs for worker endpoints plus a DNS rewriter for the hostnames the QueryEngine embeds in responses. Not worth the complexity for the test suite's needs.)
 
-12. **Given** the ADBC driver is a Linux-only `.so` published to Artifactory,
-    **When** the CI job runs on Linux,
-    **Then** the driver is downloaded from `https://artifactory.vastdata.com/artifactory/files/vastdb-native-client/`, `VASTDB__ADBC_DRIVER_PATH` + `VASTDB__ADBC_ENDPOINT` are exported, and the native `array_distance()` search path is exercised (not the in-memory fallback). On macOS developer machines the `.so` is absent and the fallback path is used — documented, not a regression.
+12. **Given** the ADBC native `array_distance()` path is intentionally not exercised under CI,
+    **When** the `integration-test` job runs,
+    **Then** `VASTDB__ADBC_DRIVER_PATH` and `VASTDB__ADBC_ENDPOINT` are intentionally **not** exported, so `_adbc_available()` returns False and every search goes through the in-memory `_do_vector_search_fallback` (L2Sq scan). This is explicitly acceptable: the test suite's correctness assertions hold under either path. The native `array_distance()` path is still exercised on developer machines that have direct network access to the QueryEngine (and the Linux `.so` or macOS-compatible driver). Exercising the native path under CI is deferred-work and tracked in `deferred-work.md`.
 
 13. **Given** `_do_vector_search_adbc` builds a parameterized SQL query,
     **When** the query runs against VAST's DuckDB dialect,
@@ -118,8 +118,8 @@ Target after these fixes (when the v74 cluster is available again): **15 passed,
   - [x] Pipeline #55 on `fix/3-1-live-cluster-validation` reports **15 passed / 12 skipped / 1 xfailed / 0 failed / 0 errors**.
 
 - [x] **Task 9: CI SSH tunnel to reach the cluster (AC #11)** — commit `1280aaf`
-  - [x] Add `scripts/ci-tunnel.sh` opening REST API + ADBC QueryEngine tunnels via the jump host with `sshpass`.
-  - [x] Wire the script into `.gitlab-ci.yml` `integration-test` job; export `VASTDB__ENDPOINT=https://localhost:18151` and `VASTDB__ADBC_ENDPOINT=http://localhost:18080`.
+  - [x] Add `scripts/ci-tunnel.sh` opening a single REST API tunnel via the jump host with `sshpass`. (An ADBC QueryEngine tunnel was attempted and reverted — see AC #11.)
+  - [x] Wire the script into `.gitlab-ci.yml` `integration-test` job; export `VASTDB__ENDPOINT=https://localhost:18151`. Do NOT export `VASTDB__ADBC_ENDPOINT` or `VASTDB__ADBC_DRIVER_PATH` — the fallback path handles CI search.
   - [x] Add `--junitxml=report.xml` + `artifacts.reports.junit` so the GitLab Tests tab is populated and ADBC fallback warnings are visible in CI logs.
 
 - [x] **Task 10: ADBC SQL dialect fixes in `_do_vector_search_adbc` (AC #13)** — commit `ccc0726`
@@ -130,9 +130,10 @@ Target after these fixes (when the v74 cluster is available again): **15 passed,
   - [x] Remove the `adbc_driver=adbc_driver` kwarg from the shared-session `vastdb.connect()` call in `tests/integration_tests/test_vectorstore.py`.
   - [x] Document in the fixture docstring that `VastDBVectorStore` opens its own ADBC connection via `VASTDB__ADBC_ENDPOINT`.
 
-- [x] **Task 12: ADBC driver provisioning on CI (AC #12)** — part of commit `1280aaf`/`b954eeb`
-  - [x] CI job downloads the Linux `.so` from `https://artifactory.vastdata.com/artifactory/files/vastdb-native-client/` and exports `VASTDB__ADBC_DRIVER_PATH`.
-  - [x] Native `array_distance()` path is exercised on CI; macOS dev still falls back in-memory.
+- [x] **Task 12: ADBC on CI — intentionally deferred (AC #12)** — superseded by reconciliation 2026-04-15
+  - [x] CI does NOT download the ADBC `.so` and does NOT export `VASTDB__ADBC_DRIVER_PATH` / `VASTDB__ADBC_ENDPOINT`. All CI searches go through `_do_vector_search_fallback`.
+  - [x] Rationale: exercising the native `array_distance()` path from CI requires ~16 SSH tunnel legs + a DNS rewriter for the QueryEngine's embedded hostnames. Cost/benefit does not clear for this story.
+  - [x] A corresponding deferred-work entry captures the option to revisit this later.
 
 ## Dev Notes
 
@@ -167,7 +168,7 @@ The following items from the Story 3.1 code review remain open and are tracked i
 
 - `src/langchain_vastdb/vectorstores.py` — modified: seven correctness fixes (ACs #1–#8) plus the warning log, plus ADBC SQL dialect fixes in `_do_vector_search_adbc` (AC #13).
 - `scripts/ci-tunnel.sh` — new: opens REST API + ADBC QueryEngine SSH tunnels via the jump host (AC #11).
-- `.gitlab-ci.yml` — modified: integration-test job wires in the tunnel, downloads the ADBC driver, exports `VASTDB__*` env vars, emits JUnit XML (ACs #11, #12).
+- `.gitlab-ci.yml` — modified: integration-test job wires in the single REST-only tunnel, exports `VASTDB__ENDPOINT`, emits JUnit XML (AC #11). No ADBC driver download — see AC #12.
 - `tests/integration_tests/test_vectorstore.py` — modified: fixture no longer passes `adbc_driver` into `vastdb.connect()` (AC #14).
 - `.gitignore` — modified: broadened `/.env` to `.env` so `.env` files in subdirectories are also ignored.
 
@@ -205,3 +206,71 @@ Claude Sonnet 4.6 (code review batch-apply)
 ### File List
 
 - `src/langchain_vastdb/vectorstores.py` (MODIFIED)
+
+## Review Findings
+
+**Review date:** 2026-04-15
+**Reviewer:** bmad-code-review (Blind Hunter + Edge Case Hunter + Acceptance Auditor)
+**Base:** `story/3-1-langchain-standard-integration-test-suite`
+**Head:** `fix/3-1-live-cluster-validation`
+**Summary:** 2 decision-needed, 8 patch, 9 defer, 6 dismissed
+
+### Decision-needed — RESOLVED 2026-04-15
+
+Both decision-needed findings below have been resolved; their resolutions are recorded here and the affected spec ACs (#1, #7, #11, #12) have been rewritten above to match reality.
+
+**D1 resolution → Option (b): CI fallback is acceptable.** ACs #11 and #12 were rewritten. `scripts/ci-tunnel.sh` remains REST-only; `.gitlab-ci.yml` intentionally does not download the ADBC `.so` or export `VASTDB__ADBC_*`. Rationale: exercising the native path from CI requires ~16 tunnel legs + a DNS rewriter for embedded QueryEngine hostnames, which does not clear the cost/benefit bar. Revisiting native-on-CI is in `deferred-work.md`.
+
+**D2 resolution → narrow the catch; keep ADBC-SQL primary.** `table.vector_search()` is NOT reinstated — it relies on cluster-side vector indexing which is a VAST 5.5+ feature; on pre-5.5 clusters the SDK path has no index to query. AC #1 was rewritten: the `VectorIndex` fallback in `_get_table` stays, but only as SDK-metadata-layer compatibility — the store's primary search path is ADBC SQL via `array_distance()`, with the in-memory L2Sq fallback as secondary. The `except Exception` in `_do_vector_search` was narrowed to `(NoAdbcConnectionError, ImportError, OSError, adbc_driver_manager.Error)` so that non-ADBC exceptions propagate and are not silently swallowed into the fallback. AC #7 was rewritten to document the narrow catch.
+
+### Original decision-needed entries (for audit trail)
+
+- **D1. AC #11 / AC #12 — CI plumbing regression vs. spec.** The reconciliation commit `3b1dfc2` marked ACs #11 and #12 as satisfied, but the code state contradicts both:
+  - `scripts/ci-tunnel.sh` opens **one** tunnel (REST API `localhost:18151`); AC #11 requires **two** (REST + ADBC QueryEngine `localhost:18080 → 172.27.151.17:80`).
+  - `.gitlab-ci.yml` integration-test job does **not** download the ADBC `.so` from Artifactory, does **not** export `VASTDB__ADBC_DRIVER_PATH`, and does **not** export `VASTDB__ADBC_ENDPOINT`. AC #12 requires all three.
+  - Git archaeology: commit `b954eeb` (earlier wip) **did** contain the ADBC driver download. Commit `1280aaf` — whose message says "set up SSH tunnels to reach VAST cluster and QueryEngine" — actually **removed** the driver download block. The commit message and AC #11's "QueryEngine tunnel" claim do not match the delivered diff.
+  - Implication: pipeline #55's "15 passed" almost certainly ran through the in-memory `_do_vector_search_fallback` path, **not** the native `array_distance()` path AC #12 requires. The spec's "Satisfied on pipeline #55" claim for AC #10 is technically true (tests passed) but masks that the native search path was never exercised on CI.
+  - **Resolution options:**
+    - (a) Restore the ADBC driver download and second tunnel (re-apply the `b954eeb` block, add the QueryEngine `sshpass` tunnel, export both env vars), re-run CI, and verify the native path is exercised (ADBC fallback warnings should be absent from job logs).
+    - (b) Downgrade the spec: rewrite ACs #11, #12 to describe the CI path as "REST-only tunnel + in-memory fallback is acceptable for this story; native `array_distance()` deferred" and open a deferred-work entry for the native path.
+
+- **D2. AC #7 exception catch breadth + native `table.vector_search()` removal.** Two architecturally-linked deviations from the spec in `_do_vector_search`:
+  - **AC #7 says** "Catch `from vastdb.transaction import NoAdbcConnectionError`" — `vectorstores.py:657` uses a broad `except Exception as exc:` that swallows every error (auth, dim mismatch, bugs) into the silent fallback path. This is how a genuine ADBC failure in CI can still produce "15 passed" — the fallback hides the error.
+  - **Spec AC #1 and #7 both assume** `table.vector_search()` is the primary path with ADBC as the fallback. In the current code, `_do_vector_search` goes **straight** to `_do_vector_search_adbc` (raw SQL through an ADBC connection the store opens itself) and never calls `table.vector_search()`. The architecture in the diff is "ADBC SQL primary, in-memory L2 fallback" — not "native `vector_search()` primary, in-memory fallback".
+  - These two issues are linked: if the primary path is ADBC SQL (not `table.vector_search()`), then `NoAdbcConnectionError` is no longer the relevant sentinel — the ADBC connection is opened by the store at a different call site, and a different failure mode (driver missing, connection refused) is what triggers the fallback.
+  - **Resolution options:**
+    - (a) Narrow the catch to `(NoAdbcConnectionError, ImportError, <specific ADBC connect errors>)` and document the "ADBC SQL primary" architecture in the spec (rewrite ACs #1, #7 to match reality). This is the honest path.
+    - (b) Reinstate `table.vector_search()` as the primary path and keep `_do_vector_search_adbc` only as a manual fallback gated on `VASTDB__ADBC_ENDPOINT` — matches the original spec but requires re-engineering.
+  - **Dependency note:** P1, P4, P5 below all touch `_do_vector_search_adbc`. If D2 resolves toward (b), those patches move to the fallback path; if (a), they stay where they are.
+
+### Patches (apply after D1/D2 are resolved)
+
+- **P1. SQL injection in `_do_vector_search_adbc` (`vectorstores.py:699-712`).** Filter dict values and column names are interpolated into the query with `f"{col} = {quoted}"`; a string value containing `'` breaks out of the literal and a malicious column name (unlikely in practice, but feasible from user metadata filters) executes arbitrary DuckDB. Escape single quotes (`val.replace("'", "''")`), validate column names against `self._metadata_columns + [self._id_column]`, and quote identifiers as `"col"`.
+- **P2. Table path identifier not escaped (`vectorstores.py:691-694`).** `f'"{bucket}"."{schema}"."{table}"'` breaks if any component contains a `"`. Escape by doubling: `name.replace('"', '""')`.
+- **P3. `len(ids) == len(texts)` assertion missing in `add_texts`.** A caller-supplied `ids` list of the wrong length silently zips short or long; no pre-check. Add `if ids is not None and len(ids) != len(texts_list): raise ValueError(...)`.
+- **P4. `k <= 0` guard in `_do_vector_search` / `_do_vector_search_adbc`.** `LIMIT 0` in DuckDB is legal but the fallback path builds a list and slices `[:0]` returning `[]`. Either short-circuit on `k <= 0` or raise — pick one and make both paths consistent.
+- **P5. NaN/inf guard in `query_vector`.** `float('nan')` in the vector generates `ARRAY[nan,...]::FLOAT[n]` which DuckDB parses but yields undefined ordering. Reject non-finite values at the edge of `similarity_search_by_vector`.
+- **P6. Duplicate IDs in caller-supplied `ids` list.** `add_texts(texts=[a,b], ids=["x","x"])` currently inserts two rows with the same id (after deleting the prior one). Either dedupe (last-write-wins) or raise. Spec upsert semantics don't define the duplicate case.
+- **P7. Boolean / non-str filter values.** `quoted = f"'{val}'" if isinstance(val, str) else str(val)` renders Python `True` as `True` (ok in DuckDB) but `None` as `None` (invalid SQL). Reject `None` filter values with a clear error, or emit `IS NULL`.
+- **P8. `.gitignore` `uv.lock` entry conflicts with `uv sync --locked`.** Line 18 adds `uv.lock` under `# UV specific`, but `uv.lock` is tracked and CI uses `--locked`. Remove the entry (or delete the tracked file intentionally — but that contradicts reproducible CI).
+
+### Deferred (append to `deferred-work.md`)
+
+- **DF1.** `_do_vector_search_fallback` full-table `read_all().to_pylist()` OOM risk on large tables. Needs streaming top-k heap design.
+- **DF2.** `_do_vector_search_adbc` opens a fresh ADBC connection per call — no pooling. Fine for test volume; not for production throughput.
+- **DF3.** No snapshot isolation between the delete and insert legs of upsert beyond "same transaction" — if the SDK transaction is not serializable, concurrent writers can interleave.
+- **DF4.** `_metadata_loaded` thread-safety (already tracked since Story 2.1; no change here).
+- **DF5.** CI stores `VASTDB__ENDPOINT_PASSWORD` as a plain GitLab variable; rotate to masked/protected or move to a vault.
+- **DF6.** `sshpass` is apt-installed in CI without pinning; supply-chain drift.
+- **DF7.** Tunnel readiness check is absent — `ci-tunnel.sh` backgrounds `ssh -f -N` and returns immediately; tests can race the tunnel. Add a `nc -z localhost 18151` wait loop.
+- **DF8.** `_do_vector_search_fallback` silently skips dim-mismatched rows — a corrupted table would return "0 results" with no signal. Add a counter + warning.
+- **DF9.** `VectorIndex` fallback hardcodes `l2sq`; if the real index on the table is cosine/dot-product, results are wrong. Operators only see the warning log. Consider a config override.
+
+### Dismissed
+
+- **X1.** `StrictHostKeyChecking=no` in `ci-tunnel.sh` — standard CI practice for ephemeral runners against a known jump host.
+- **X2.** `_insert_vectors` empty-list guard "unreachable because `add_texts` early-returns" — the guard is defense-in-depth per Task 3 and spec; correct as-is.
+- **X3.** `_row_to_document` missing `Document.id` from the diff — already on base branch from Story 3.1; AC #8 is satisfied by pre-existing code. False positive from Acceptance Auditor.
+- **X4.** `conftest.py` loading `.env` for unit tests — out-of-spec File List entry but harmless; unit tests ignore env vars. Add to File List for bookkeeping.
+- **X5.** `python-dotenv` as a new dependency — already transitively pulled in; no action.
+- **X6.** Broadened `.gitignore` `/.env` → `.env` — intentional per File List, not a finding.
