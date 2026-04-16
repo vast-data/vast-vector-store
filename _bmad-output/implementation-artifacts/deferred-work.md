@@ -49,3 +49,18 @@
 - **DF7.** `_do_vector_search_fallback` silently skips dim-mismatched rows. A corrupted table would return "0 results" with no operator signal. Emit a counter + warning.
 - **DF8.** `VectorIndex` fallback hardcodes `l2sq`. If the real index on the table is cosine/dot-product, results are wrong and only a warning log fires. Consider a config override on the store.
 - **DF9.** SQL injection in `_do_vector_search_adbc` filter interpolation — listed here as a reminder that even after the P1 patch, the ADBC SQL path is still string-concatenation-based. A proper parameterized query API via the ADBC driver would be safer long-term.
+
+## Deferred from: code review of story 3-1a-live-cluster-correctness-fixes (2026-04-15, second pass)
+
+- **DF-a.** ADBC step-2 SDK `_get_by_ids` failure is outside the ADBC try-block. If step 1 succeeds but step 2 fails, the exception propagates past the fallback. Rare but asymmetric with step-1 handling. (`vectorstores.py:789-795`)
+- **DF-b.** `_table_metadata._vector_index = VectorIndex(...)` writes a single-underscore private attribute of `vastdb.table_metadata`. Any library refactor breaks it. No public setter available. (`vectorstores.py:247-259`)
+- **DF-c.** `OSError` in the ADBC catch tuple is broader than ADBC-specific errors. Can mask disk/permission/network errors into a silent fallback. Narrow once the driver exposes specific connect errors. (`vectorstores.py:673-677`)
+- **DF-d.** Duplicate IDs in ADBC step-1 result collapse silently via `dict(zip)`. If the one-row-per-id invariant is ever violated, `len(results) < k` with no signal. Add a counter + warning. (`vectorstores.py:788-795`)
+- **DF-e.** `_adbc_available()` does not reject whitespace-only credential strings. A misconfigured env var (`VASTDB__ADBC_ENDPOINT=" "`) takes the ADBC path, fails, then falls back once per query. (`vectorstores.py:602-608`)
+- **DF-f.** `from adbc_driver_manager import dbapi` imports inside `_do_vector_search_adbc` (per-call). Micro-perf; move to module top or lazy-cache. (`vectorstores.py:718`)
+- **DF-g.** Non-int `k` (float 4.0, bool) bypasses the `k <= 0` guard. Add `isinstance(k, int) and not isinstance(k, bool)` at the entry points. (`vectorstores.py:400, 451`)
+- **DF-h.** Very large `k` (e.g. `10**9`) is interpolated directly into `LIMIT` with no server-side cap. Consider a sane ceiling or explicit caller responsibility doc. (`vectorstores.py:768`)
+- **DF-i.** `_id_column` / `_text_column` / `_metadata_column` constructor args are not quoted in the ADBC SELECT. A constructor-time column name containing `"` or SQL keywords breaks the query. Quote with the same `"..."` escape used elsewhere. (`vectorstores.py:761-764`)
+- **DF-j.** Fallback scoring loop assumes `isinstance(vec, list)`. If the Arrow reader returns a numpy array or tuple for a fixed_size_list column on some vastdb version, every row is silently skipped. Coerce via `list(vec)` before the length check. (`vectorstores.py:819-823`)
+- **DF-k.** `row[text_column]` returning None yields `Document(page_content=None)` — pydantic rejects. Symmetric with the AI-2 NULL metadata xfail; fold into that fix. (`vectorstores.py:862-865`)
+- **DF-l.** Empty-string id `""` is accepted by the None-replace path. Row is inserted with an empty id, then can't be safely round-tripped. Reject empty strings in the caller-supplied ids loop. (`vectorstores.py:314-317`)

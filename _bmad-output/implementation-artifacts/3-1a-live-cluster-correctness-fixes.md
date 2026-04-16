@@ -1,6 +1,6 @@
 # Story 3.1a: Live-Cluster Correctness Fixes for VastDBVectorStore
 
-Status: review
+Status: done
 
 ## Story
 
@@ -55,7 +55,7 @@ Target after these fixes (when the v74 cluster is available again): **15 passed,
 
 9. **Given** the `uv run ruff check .` and `uv run pytest tests/unit_tests/` commands,
    **When** they run against this branch,
-   **Then** both exit `0` with zero warnings and 29/29 unit tests pass.
+   **Then** both exit `0` with zero warnings and 41/41 unit tests pass.
 
 10. **Given** a reachable VAST integration cluster (originally v74, re-targeted to v151 after v74 was decommissioned),
     **When** `uv run pytest tests/integration_tests/ -v` runs **in CI** via the GitLab pipeline,
@@ -140,7 +140,7 @@ Target after these fixes (when the v74 cluster is available again): **15 passed,
 
 - [x] **Task 13b: Code-review patch backlog (findings P1–P8 from 2026-04-15 review)** — commits `4a4de6b`, `fffddb5`, `c275edd`
   - [x] **P1. SQL injection in `_do_vector_search_adbc` filter interpolation** (`vectorstores.py` ~699–712). Escape single quotes in string values (`val.replace("'", "''")`). Validate column names against `self._metadata_columns + [self._id_column]` before interpolation. Quote identifiers as `"col"`. Add unit tests: a filter value containing `'`, a filter key that isn't in the allowed column list.
-  - [x] **P2. Table path identifier escape** (`vectorstores.py` ~691–694). Double-up `"` in each of bucket / schema / table components before building the `f'"{b}"."{s}"."{t}"'` path. Unit test: a bucket name containing `"`.
+  - [x] **P2. Table path identifier escape** (`vectorstores.py` ~691–694). Double-up `"` in each of bucket / schema / table components before building the `f'"{b}/{s}"."{t}"'` path (VAST's DuckDB dialect treats `bucket/schema` as a single quoted identifier, not a three-part name — validated against live pipeline #55). Unit test: a bucket name containing `"`.
   - [x] **P3. `len(ids) == len(texts)` assertion in `add_texts`.** Raise `ValueError(f"ids length {len(ids)} != texts length {len(texts_list)}")` when `ids is not None` and the lengths differ. Unit test: `add_texts(["a","b"], ids=["x"])` raises.
   - [x] **P4. `k <= 0` guard — raise `ValueError`.** Validate at the `similarity_search` / `similarity_search_by_vector` entry points (one place, so both ADBC and fallback paths inherit). Unit test: `similarity_search("q", k=0)` raises, `similarity_search("q", k=-1)` raises.
   - [x] **P5. NaN / inf guard on `query_vector`.** Reject non-finite values at the edge of `similarity_search_by_vector` with `ValueError("query vector contains non-finite values")`. Use `all(math.isfinite(x) for x in query_vector)`. Unit test: `float('nan')` and `float('inf')` both raise.
@@ -300,3 +300,49 @@ Both decision-needed findings below have been resolved; their resolutions are re
 - **X4.** `conftest.py` loading `.env` for unit tests — out-of-spec File List entry but harmless; unit tests ignore env vars. Add to File List for bookkeeping.
 - **X5.** `python-dotenv` as a new dependency — already transitively pulled in; no action.
 - **X6.** Broadened `.gitignore` `/.env` → `.env` — intentional per File List, not a finding.
+
+## Review Findings — 2026-04-15 (second pass)
+
+**Review date:** 2026-04-15
+**Reviewer:** bmad-code-review (Blind Hunter + Edge Case Hunter + Acceptance Auditor)
+**Scope:** `src/langchain_vastdb/vectorstores.py` only (diff `story/3-1-langchain-standard-integration-test-suite...HEAD`, 574 lines)
+**Summary:** 3 decision-needed, 7 patch, 12 defer, 7 dismissed
+
+### Decision-needed
+
+- [x] **[Review][Decision] DN1. Table path format deviates from spec P2 example.** Resolved → keep code; spec P2 example updated to `f'"{b}/{s}"."{t}"'` to match VAST's DuckDB dialect (validated against live pipeline #55). Evidence: `vectorstores.py:722-725`.
+- [x] **[Review][Decision] DN2. Credentials now retained on `self`; prior invariant explicitly promised they would not be.** Resolved → document the new behavior in the `__init__` docstring (option a). A per-call ADBC connection requires the credentials; refactor to env-only or single-connection pooling is tracked as a future option. Evidence: `vectorstores.py:113-116, 770-777`.
+- [x] **[Review][Decision] DN3. WHERE-clause allowlist includes `_vector_column` and `_metadata_column`.** Resolved → tightened allowlist to `{_id_column, _text_column}` (option a). Vector equality is nonsensical; metadata equality is position-dependent on JSON bytes. Evidence: `vectorstores.py:728-733`.
+
+### Patches (applied 2026-04-15)
+
+- [x] **[Review][Patch] P1. `similarity_search_with_score` skips k-validation.** `similarity_search` (line 400) and `similarity_search_by_vector` (line 451) both guard `k <= 0`; `similarity_search_with_score` does not and delegates directly to `_vector_search`. `k=0` produces `LIMIT 0` or `[:0]` silently. Add the same `if k <= 0: raise ValueError(...)` at the entry point. `[src/langchain_vastdb/vectorstores.py:408-429]`
+- [x] **[Review][Patch] P2. `similarity_search` does not validate finiteness of the embedded query vector.** `similarity_search_by_vector` guards `math.isfinite`; `similarity_search` calls `_embedding.embed_query(query)` then passes the result straight to `_vector_search`. A misbehaving embedding model returning NaN/inf reaches ADBC SQL (`ARRAY[nan,...]`) or the fallback (producing NaN distances). Apply the same check after `embed_query`. `[src/langchain_vastdb/vectorstores.py:400-406]`
+- [x] **[Review][Patch] P3. Empty `embedding` accepted by `similarity_search_by_vector`.** `all(math.isfinite(x) for x in [])` returns `True`, so a zero-length vector passes validation and is interpolated as `FLOAT[0]` / empty `ARRAY[]` in SQL. Add `if not embedding: raise ValueError("query vector must be non-empty")`. `[src/langchain_vastdb/vectorstores.py:451-457]`
+- [x] **[Review][Patch] P4. Boolean filter values render as `str(True)` → `"True"`, not `TRUE`.** `str(bool)` → `"True"` is not a portable SQL literal and DuckDB may reject it in some contexts. Also, because `bool` is a subclass of `int`, the intended numeric branch silently catches it. Add `isinstance(val, bool)` branch before the fallback that emits `TRUE` / `FALSE`. `[src/langchain_vastdb/vectorstores.py:747-751]`
+- [x] **[Review][Patch] P5. `metadatas` length not validated against `texts_list` length in `add_texts`.** `ids` has a length-mismatch check; `metadatas` does not. A caller-supplied `metadatas` list of the wrong length silently reaches `pa.RecordBatch.from_pydict` and produces a cryptic Arrow error. Add the symmetric check. `[src/langchain_vastdb/vectorstores.py:306-322]`
+- [x] **[Review][Patch] P6. Duplicate-ID check runs after `embed_documents`, wasting embedding compute on invalid input.** Current order: length-check → embed → replace None → dup-check → raise. Reorder so that length + duplicate validation runs before `self._embedding.embed_documents(texts_list)`. (Length check is already pre-embed; only the dup check needs to move up.) `[src/langchain_vastdb/vectorstores.py:310-321]`
+- [x] **[Review][Patch] P7. AC #9 text says "29/29 unit tests pass"; actual state is 41/41.** Spec contradicts itself: Task 13b and Dev Agent Record both say 41/41 after P1–P7 added 12 new tests. Update AC #9 to `41/41`. `[_bmad-output/implementation-artifacts/3-1a-live-cluster-correctness-fixes.md:58]`
+
+### Deferred (appended to `deferred-work.md`)
+
+- [x] **[Review][Defer] DF-a. ADBC step-2 SDK `_get_by_ids` failure is not inside the ADBC try-block.** If ADBC step 1 succeeds but the SDK step-2 row fetch fails, the exception propagates past the fallback. Rare but asymmetric with step-1 failure handling. `[src/langchain_vastdb/vectorstores.py:789-795]` — deferred, edge case.
+- [x] **[Review][Defer] DF-b. `_table_metadata._vector_index = VectorIndex(...)` writes a private attribute of a third-party library.** API misuse that breaks on any vastdb refactor. No public setter available. `[src/langchain_vastdb/vectorstores.py:247-259]` — deferred, pre-existing SDK limitation (same class as existing `vastdb._internal.VectorIndexSpec` entry).
+- [x] **[Review][Defer] DF-c. `OSError` in the ADBC catch tuple is broader than intended.** Can mask disk/permission/network errors unrelated to ADBC connect into a silent fallback. Narrow to specific connect errors once the ADBC driver exposes them. `[src/langchain_vastdb/vectorstores.py:673-677]` — deferred, tradeoff already discussed in D2 resolution.
+- [x] **[Review][Defer] DF-d. Duplicate IDs in ADBC step-1 result collapse silently via `dict(zip)`.** If the table somehow has two rows with the same id (invariant broken), step 2 returns fewer than k results with no warning. Add a counter + warning when `len(set(ids)) != len(ids)`. `[src/langchain_vastdb/vectorstores.py:788-795]` — deferred, invariant-violation observability.
+- [x] **[Review][Defer] DF-e. `_adbc_available()` does not reject whitespace-only credential strings.** Misconfigured env var (`VASTDB__ADBC_ENDPOINT=" "`) takes the ADBC path, fails at connect, then falls back per query. `[src/langchain_vastdb/vectorstores.py:602-608]` — deferred, config hygiene.
+- [x] **[Review][Defer] DF-f. `from adbc_driver_manager import dbapi` inside `_do_vector_search_adbc`.** Import-on-every-call adds latency and hides import errors until first query. Move to module top or lazy-cache on `self`. `[src/langchain_vastdb/vectorstores.py:718]` — deferred, micro-perf.
+- [x] **[Review][Defer] DF-g. Non-int `k` (float 4.0, bool) bypasses `k <= 0` check.** `True <= 0` is False; the check passes and `LIMIT True` may or may not be valid DuckDB. Add `isinstance(k, int) and not isinstance(k, bool)` at the entry points. `[src/langchain_vastdb/vectorstores.py:400, 451]` — deferred, low reach.
+- [x] **[Review][Defer] DF-h. Very large `k` (e.g. `10**9`) is interpolated directly into `LIMIT`.** No server-side cap. Introduce a sane ceiling or document caller responsibility. `[src/langchain_vastdb/vectorstores.py:768]` — deferred, policy decision.
+- [x] **[Review][Defer] DF-i. `_id_column` / `_text_column` / `_metadata_column` (constructor args) not quoted in SQL `SELECT`.** A constructor-time id_column containing `"` or SQL keywords breaks the query. Quote the SELECT columns with the same `"..."` escape used elsewhere. `[src/langchain_vastdb/vectorstores.py:761-764]` — deferred, attack vector is constructor-time not query-time.
+- [x] **[Review][Defer] DF-j. Fallback scoring loop assumes `isinstance(vec, list)`.** If the Arrow reader returns a numpy array or tuple for a fixed_size_list column on some vastdb version, every row is silently skipped. Coerce via `list(vec)` before the length check. `[src/langchain_vastdb/vectorstores.py:819-823]` — deferred, depends on SDK reader behavior.
+- [x] **[Review][Defer] DF-k. `row[text_column]` returning None yields `Document(page_content=None)` — pydantic rejects.** Symmetric with the AI-2 NULL metadata xfail. `[src/langchain_vastdb/vectorstores.py:862-865]` — deferred, belongs with AI-2 fix.
+- [x] **[Review][Defer] DF-l. Empty-string id `""` accepted by the None-replace path.** Row is inserted with an empty id, then cannot be round-tripped via `get_by_ids([""])` without surprises. Reject empty strings in the caller-supplied ids loop. `[src/langchain_vastdb/vectorstores.py:314-317]` — deferred, low reach.
+
+### Dismissed
+
+- **Y1.** Blind-Hunter claim that `_insert_vectors` does not accept `tx` — false positive; the keyword-only `tx: Transaction | None = None` parameter exists at `vectorstores.py:339`.
+- **Y2.** Blind-Hunter claim that the `Counter` dup-check is too narrowly scoped to `ids_provided` — correct as-is; `Document.id` values flow into the caller-supplied `ids` path.
+- **Y3.** Blind-Hunter claim that `_delete_by_ids([]) -> True` "hides caller bugs" — matches AC #4 defense-in-depth requirement.
+- **Y4.** Edge-case UUID4 collision with existing row — astronomical probability; not worth guarding.
+- **Y5/Y6/Y7.** Acceptance-Auditor "undocumented scope" notes for `_adbc_available()`, dynamic `adbc_driver_manager.Error` import, `filter_dict` kwarg threading, and two-step ADBC architecture — scope-documentation concerns, not bugs; the existing AC language covers them adequately.

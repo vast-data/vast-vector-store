@@ -98,9 +98,13 @@ class VastDBVectorStore(VectorStore):
                 ``"172.27.74.17"`` or ``"query-engine.platform.svc.cluster.local"``.
                 This is separate from the HTTP REST endpoint.
             access_key: S3-style access key for the ADBC connection. Required
-                when ``adbc_driver_path`` is set.
+                when ``adbc_driver_path`` is set. **Retained as an instance
+                attribute** for per-call ADBC connection open; callers that
+                prefer not to retain credentials in memory should rotate the
+                key or construct a fresh store per request.
             secret_key: S3-style secret key for the ADBC connection. Required
-                when ``adbc_driver_path`` is set.
+                when ``adbc_driver_path`` is set. **Retained as an instance
+                attribute** — same caveat as ``access_key``.
         """
         self._embedding = embedding
         self._session = session
@@ -307,7 +311,10 @@ class VastDBVectorStore(VectorStore):
             raise ValueError(
                 f"ids length {len(ids)} != texts length {len(texts_list)}"
             )
-        vectors = self._embedding.embed_documents(texts_list)
+        if metadatas is not None and len(metadatas) != len(texts_list):
+            raise ValueError(
+                f"metadatas length {len(metadatas)} != texts length {len(texts_list)}"
+            )
         ids_provided = ids is not None
         if ids is None:
             ids = [str(uuid.uuid4()) for _ in texts_list]
@@ -319,6 +326,7 @@ class VastDBVectorStore(VectorStore):
             dupes = [id_ for id_, cnt in Counter(ids).items() if cnt > 1]
             if dupes:
                 raise ValueError(f"Duplicate IDs in supplied ids: {dupes}")
+        vectors = self._embedding.embed_documents(texts_list)
         if metadatas is None:
             metadatas = [{} for _ in texts_list]
         with self._session.transaction() as tx:
@@ -401,6 +409,8 @@ class VastDBVectorStore(VectorStore):
             raise ValueError(f"k must be a positive integer, got {k}")
         filter_dict = kwargs.get("filter")
         query_vector = self._embedding.embed_query(query)
+        if not all(math.isfinite(x) for x in query_vector):
+            raise ValueError("query vector contains non-finite values")
         predicate = self._build_predicate(filter_dict)
         results = self._vector_search(query_vector, k, predicate=predicate, filter_dict=filter_dict)
         return [self._row_to_document(row) for row, _ in results]
@@ -422,8 +432,12 @@ class VastDBVectorStore(VectorStore):
         Returns:
             List of (Document, distance_score) tuples, ordered by similarity.
         """
+        if k <= 0:
+            raise ValueError(f"k must be a positive integer, got {k}")
         filter_dict = kwargs.get("filter")
         query_vector = self._embedding.embed_query(query)
+        if not all(math.isfinite(x) for x in query_vector):
+            raise ValueError("query vector contains non-finite values")
         predicate = self._build_predicate(filter_dict)
         results = self._vector_search(query_vector, k, predicate=predicate, filter_dict=filter_dict)
         return [(self._row_to_document(row, score), score) for row, score in results]
@@ -450,6 +464,8 @@ class VastDBVectorStore(VectorStore):
         """
         if k <= 0:
             raise ValueError(f"k must be a positive integer, got {k}")
+        if not embedding:
+            raise ValueError("query vector must be non-empty")
         if not all(math.isfinite(x) for x in embedding):
             raise ValueError("query vector contains non-finite values")
         filter_dict = kwargs.get("filter")
@@ -725,12 +741,9 @@ class VastDBVectorStore(VectorStore):
         table_path = f'"{bucket_esc}/{schema_esc}"."{table_esc}"'
 
         # Build WHERE clause from simple equality filters (P1, P7).
-        _allowed_cols = {
-            self._id_column,
-            self._text_column,
-            self._vector_column,
-            self._metadata_column,
-        }
+        # Scalar columns only: equality on _vector_column (float[]) is nonsensical
+        # and equality on _metadata_column is position-dependent on JSON bytes.
+        _allowed_cols = {self._id_column, self._text_column}
         where_parts: list[str] = []
         if filter_dict:
             for col, val in filter_dict.items():
@@ -744,7 +757,9 @@ class VastDBVectorStore(VectorStore):
                         f"filter value for {col!r} is None; use IS NULL via a "
                         "predicate or omit the key"
                     )
-                if isinstance(val, str):
+                if isinstance(val, bool):
+                    quoted = "TRUE" if val else "FALSE"
+                elif isinstance(val, str):
                     escaped = val.replace("'", "''")
                     quoted = f"'{escaped}'"
                 else:
