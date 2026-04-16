@@ -1,6 +1,6 @@
 # Story 4.1: README with Quickstart, Configuration & Subclassing Guide
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -20,21 +20,21 @@ So that I can go from installation to working vector store in under 15 minutes a
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Rewrite README.md with full structure (AC: #1, #2, #3, #4)
-  - [ ] 1.1 Write project description and badges/compatibility header
-  - [ ] 1.2 Write Installation section (pip, uv)
-  - [ ] 1.3 Write Quickstart section with 3 paths: session-first, factory classmethod, from_texts
-  - [ ] 1.4 Write CRUD Operations section (add_texts, similarity_search, get_by_ids, delete)
-  - [ ] 1.5 Write Configuration Reference section documenting all constructor params + ADBC params
-  - [ ] 1.6 Write Subclassing Guide section with Template Method explanation + 5 hook signatures + concrete example
-  - [ ] 1.7 Write footer sections: links to examples/migration guide, development setup, license, compatibility
-- [ ] Task 2: Validate README renders correctly (AC: #4)
-  - [ ] 2.1 Verify all code blocks have correct syntax highlighting
-  - [ ] 2.2 Verify internal/external links are valid
-  - [ ] 2.3 Verify section anchors work for cross-references
-- [ ] Task 3: Run linter to ensure no project regressions (AC: all)
-  - [ ] 3.1 `uv run ruff check .` exits 0
-  - [ ] 3.2 `uv run pytest tests/unit_tests/` all pass (no regressions from doc-only changes)
+- [x] Task 1: Rewrite README.md with full structure (AC: #1, #2, #3, #4)
+  - [x] 1.1 Write project description and badges/compatibility header
+  - [x] 1.2 Write Installation section (pip, uv)
+  - [x] 1.3 Write Quickstart section with 3 paths: session-first, factory classmethod, from_texts
+  - [x] 1.4 Write CRUD Operations section (add_texts, similarity_search, get_by_ids, delete)
+  - [x] 1.5 Write Configuration Reference section documenting all constructor params + ADBC params
+  - [x] 1.6 Write Subclassing Guide section with Template Method explanation + 5 hook signatures + concrete example
+  - [x] 1.7 Write footer sections: links to examples/migration guide, development setup, license, compatibility
+- [x] Task 2: Validate README renders correctly (AC: #4)
+  - [x] 2.1 Verify all code blocks have correct syntax highlighting
+  - [x] 2.2 Verify internal/external links are valid
+  - [x] 2.3 Verify section anchors work for cross-references
+- [x] Task 3: Run linter to ensure no project regressions (AC: all)
+  - [x] 3.1 `uv run ruff check .` exits 0
+  - [x] 3.2 `uv run pytest tests/unit_tests/` all pass (no regressions from doc-only changes)
 
 ## Dev Notes
 
@@ -183,9 +183,23 @@ Public methods (inherited from `VectorStore` + implemented):
 
 ### Agent Model Used
 
+Claude Opus 4.6
+
 ### Debug Log References
 
 ### Completion Notes List
 
+- Complete README rewrite: 158 lines -> 302 lines.
+- Added: Configuration Reference with full constructor parameter table, factory classmethod table, and ADBC configuration.
+- Added: Subclassing Guide with Template Method explanation, all 5 hook signatures (from actual source), transaction reuse pattern, and typed metadata columns example.
+- Added: Retriever / LCEL RAG chain usage section, similarity_search_with_score, similarity_search_by_vector.
+- Preserved: installation, quickstart (3 paths), CRUD operations, custom columns, cache management, development, license.
+- All code examples verified against actual source signatures (vectorstores.py lines 64-176, 340-386, 496-515, 558-577, 627-646, 859-878).
+- `uv run ruff check .` -- PASS (zero warnings).
+- `uv run pytest tests/unit_tests/` -- 47/47 passed (no regressions).
+- No production code changes. Documentation-only story.
+
 ### File List
+
+- `README.md` (MODIFIED -- complete rewrite with config reference and subclassing guide)
 
