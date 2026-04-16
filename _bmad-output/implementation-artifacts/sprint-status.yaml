@@ -36,7 +36,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-09
-last_updated: 2026-04-15  # 3-1a-live-cluster-correctness-fixes done (second-pass review)
+last_updated: 2026-04-16  # 3-2 story created
 project: vast-vector-store
 project_key: NOKEY
 tracking_system: file-system
@@ -62,7 +62,7 @@ development_status:
   epic-3: in-progress
   3-1-langchain-standard-integration-test-suite: done
   3-1a-live-cluster-correctness-fixes: done
-  3-2-retriever-and-rag-chain-integration-validation: backlog
+  3-2-retriever-and-rag-chain-integration-validation: ready-for-dev
   epic-3-retrospective: optional
 
   # Epic 4: Documentation, Examples & Publication
