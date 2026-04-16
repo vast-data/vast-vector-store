@@ -1,6 +1,6 @@
 # Story 3.2: Retriever & RAG Chain Integration Validation
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -36,33 +36,33 @@ so that I can integrate VAST-backed vector search into my LangChain applications
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Unit tests for `as_retriever()` basic functionality (AC #1, #2)**
-  - [ ] Add test `test_as_retriever_returns_retriever_instance` — verify `store.as_retriever()` returns a `VectorStoreRetriever`.
-  - [ ] Add test `test_retriever_invoke_returns_documents` — add docs, create retriever, call `retriever.invoke("query")`, assert returns `list[Document]` with expected content.
-  - [ ] Add test `test_retriever_invoke_empty_store` — retriever on empty store returns `[]`.
+- [x] **Task 1: Unit tests for `as_retriever()` basic functionality (AC #1, #2)**
+  - [x] Add test `test_as_retriever_returns_retriever_instance` — verify `store.as_retriever()` returns a `VectorStoreRetriever`.
+  - [x] Add test `test_retriever_invoke_returns_documents` — add docs, create retriever, call `retriever.invoke("query")`, assert returns `list[Document]` with expected content.
+  - [x] Add test `test_retriever_invoke_empty_store` — retriever on empty store returns `[]`.
 
-- [ ] **Task 2: Unit tests for retriever with custom search_kwargs (AC #3)**
-  - [ ] Add test `test_retriever_with_k_kwarg` — `as_retriever(search_kwargs={"k": 2})`, invoke, assert at most 2 results.
-  - [ ] Add test `test_retriever_with_filter_kwarg` — `as_retriever(search_kwargs={"filter": {"category": "news"}})`, invoke, verify `similarity_search` called with the filter. Use mock patching on `similarity_search` to verify kwargs pass-through.
+- [x] **Task 2: Unit tests for retriever with custom search_kwargs (AC #3)**
+  - [x] Add test `test_retriever_with_k_kwarg` — `as_retriever(search_kwargs={"k": 2})`, invoke, assert at most 2 results.
+  - [x] Add test `test_retriever_with_filter_kwarg` — `as_retriever(search_kwargs={"filter": {"category": "news"}})`, invoke, verify `similarity_search` called with the filter. Use mock patching on `similarity_search` to verify kwargs pass-through.
 
-- [ ] **Task 3: Unit tests for LCEL RAG chain pattern (AC #4)**
-  - [ ] Add test `test_lcel_rag_chain_executes` — build an LCEL chain: `{"context": retriever, "question": RunnablePassthrough()} | prompt | llm | StrOutputParser()`. Use `FakeListLLM` from `langchain_core.language_models` as the LLM. Assert the chain `.invoke("query")` returns a string response.
-  - [ ] Verify the retriever is invoked (documents fetched) as part of the chain execution.
+- [x] **Task 3: Unit tests for LCEL RAG chain pattern (AC #4)**
+  - [x] Add test `test_lcel_rag_chain_executes` — build an LCEL chain: `{"context": retriever, "question": RunnablePassthrough()} | prompt | llm | StrOutputParser()`. Use `FakeListLLM` from `langchain_core.language_models` as the LLM. Assert the chain `.invoke("query")` returns a string response.
+  - [x] Verify the retriever is invoked (documents fetched) as part of the chain execution.
 
-- [ ] **Task 4: Integration tests for `as_retriever()` (AC #1, #2, #6)**
-  - [ ] Add test `test_as_retriever_returns_documents` — use the existing `vectorstore` fixture, add documents, create retriever, `retriever.invoke("query")`, assert correct `Document` objects returned.
-  - [ ] Verify `Document.id` is preserved through the retriever path.
+- [x] **Task 4: Integration tests for `as_retriever()` (AC #1, #2, #6)**
+  - [x] Add test `test_as_retriever_returns_documents` — use the existing `vectorstore` fixture, add documents, create retriever, `retriever.invoke("query")`, assert correct `Document` objects returned.
+  - [x] Verify `Document.id` is preserved through the retriever path.
 
-- [ ] **Task 5: Integration tests for custom search_kwargs (AC #3, #6)**
-  - [ ] Add test `test_retriever_custom_k` — add 5 docs, create retriever with `search_kwargs={"k": 2}`, invoke, assert exactly 2 docs returned.
-  - [ ] Add test `test_retriever_with_metadata_filter` — add docs with varying metadata, create retriever with `search_kwargs={"filter": {"category": "news"}}`, invoke, assert only docs with matching metadata returned.
+- [x] **Task 5: Integration tests for custom search_kwargs (AC #3, #6)**
+  - [x] Add test `test_retriever_custom_k` — add 5 docs, create retriever with `search_kwargs={"k": 2}`, invoke, assert exactly 2 docs returned.
+  - [x] Add test `test_retriever_with_metadata_filter` — add docs with varying metadata, create retriever with `search_kwargs={"filter": {"category": "news"}}`, invoke, assert only docs with matching metadata returned.
 
-- [ ] **Task 6: Integration test for LCEL RAG chain (AC #4, #6)**
-  - [ ] Add test `test_lcel_rag_chain_with_live_retriever` — build LCEL chain with live retriever + `FakeListLLM`, invoke, assert chain returns a string and retriever provided real documents from VAST.
+- [x] **Task 6: Integration test for LCEL RAG chain (AC #4, #6)**
+  - [x] Add test `test_lcel_rag_chain_with_live_retriever` — build LCEL chain with live retriever + `FakeListLLM`, invoke, assert chain returns a string and retriever provided real documents from VAST.
 
-- [ ] **Task 7: Local validation (AC #5)**
-  - [ ] `uv run ruff check .` exits 0 with zero warnings.
-  - [ ] `uv run pytest tests/unit_tests/` — all tests pass (41 existing + new).
+- [x] **Task 7: Local validation (AC #5)**
+  - [x] `uv run ruff check .` exits 0 with zero warnings.
+  - [x] `uv run pytest tests/unit_tests/` — all tests pass (41 existing + 6 new = 47).
 
 ## Dev Notes
 
@@ -160,8 +160,21 @@ For integration tests with metadata filters: insert documents with metadata like
 
 ### Agent Model Used
 
+Claude Opus 4.6
+
 ### Debug Log References
 
 ### Completion Notes List
 
+- All 7 tasks completed. No production code changes needed — `as_retriever()` is inherited from `VectorStore`.
+- 6 new unit tests added (47 total, all pass). Tests cover: retriever instantiation, invoke returning Documents, empty store, k kwarg passthrough, filter kwarg passthrough, and full LCEL RAG chain with FakeListLLM.
+- 4 new integration tests added. Tests cover: retriever returning Documents with preserved IDs, custom k limiting results, text-column filter passthrough, and LCEL RAG chain end-to-end with live VAST cluster.
+- Note: metadata filter test uses `filter={"text": "target text"}` (column-level filter) rather than `filter={"category": "news"}` (JSON metadata path), because the store's ADBC path allowlist only permits `_id_column` and `_text_column` as filter keys. This is a known limitation documented in Story 3.1a review findings.
+- `uv run ruff check .` — PASS (zero warnings).
+- `uv run pytest tests/unit_tests/` — **47/47 passed** (41 existing + 6 new).
+- Integration tests require live VAST cluster; auto-skipped when env vars missing.
+
 ### File List
+
+- `tests/unit_tests/test_vectorstore.py` (MODIFIED — 6 new retriever/chain tests)
+- `tests/integration_tests/test_vectorstore.py` (MODIFIED — 4 new retriever/chain integration tests, added Document import)
