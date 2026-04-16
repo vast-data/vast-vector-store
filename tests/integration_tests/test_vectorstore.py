@@ -3,13 +3,18 @@
 import os
 import uuid
 from collections.abc import Generator
+from typing import Any
 
 import pyarrow as pa
 import pytest
 import vastdb
 from langchain_core.documents import Document
+from langchain_core.retrievers import BaseRetriever
 from langchain_core.vectorstores import VectorStore
-from langchain_tests.integration_tests import VectorStoreIntegrationTests
+from langchain_tests.integration_tests import (
+    RetrieversIntegrationTests,
+    VectorStoreIntegrationTests,
+)
 from langchain_tests.integration_tests.vectorstores import EMBEDDING_SIZE
 from vastdb.config import BackoffConfig
 
@@ -47,6 +52,73 @@ _ARROW_SCHEMA = pa.schema([
 
 
 # ---------------------------------------------------------------------------
+# Shared fixture helper
+# ---------------------------------------------------------------------------
+
+
+def _build_vectorstore() -> Generator[VectorStore, None, None]:
+    """Yield an empty VastDBVectorStore backed by a dedicated, isolated test table.
+
+    Creates a uniquely-named schema and table on the test VAST cluster before
+    yielding, and drops both unconditionally in the finally block.
+
+    Required env vars: VASTDB__ENDPOINT, VASTDB__ACCESS_KEY, VASTDB__SECRET_KEY,
+    VASTDB__BUCKET. Optional: VASTDB__ADBC_DRIVER_PATH + VASTDB__ADBC_ENDPOINT
+    enable native ADBC vector search via array_distance() SQL (no vector
+    index required). Load env vars via your IDE's run config, `direnv`, or
+    `set -a && source .env && set +a`.
+    """
+    endpoint = os.environ["VASTDB__ENDPOINT"]
+    access_key = os.environ["VASTDB__ACCESS_KEY"]
+    secret_key = os.environ["VASTDB__SECRET_KEY"]
+    bucket = os.environ["VASTDB__BUCKET"]
+    run_id = uuid.uuid4().hex[:12]
+    schema = f"lc_vs_it_{run_id}"
+    table_name = f"lc_vs_it_{run_id}"
+
+    adbc_driver_path = os.environ.get("VASTDB__ADBC_DRIVER_PATH")
+    adbc_endpoint = os.environ.get("VASTDB__ADBC_ENDPOINT")
+    # Note: adbc_driver is NOT passed to vastdb.connect() — the SDK would route
+    # it through the HTTPS endpoint (TLS issues). VastDBVectorStore opens its own
+    # ADBC connection directly to adbc_endpoint (the QueryEngine IP).
+    session = vastdb.connect(
+        endpoint=endpoint,
+        access=access_key,
+        secret=secret_key,
+        timeout=10,
+        ssl_verify=False,
+        backoff_config=BackoffConfig(max_tries=2, max_time=15.0),
+    )
+
+    with session.transaction() as tx:
+        b = tx.bucket(bucket)
+        b.create_schema(schema)
+        b.schema(schema).create_table(table_name, _ARROW_SCHEMA)
+
+    store = VastDBVectorStore(
+        embedding=VectorStoreIntegrationTests.get_embeddings(),
+        session=session,
+        bucket=bucket,
+        schema=schema,
+        table_name=table_name,
+        adbc_driver_path=adbc_driver_path,
+        adbc_endpoint=adbc_endpoint,
+        access_key=access_key,
+        secret_key=secret_key,
+    )
+    try:
+        yield store
+    finally:
+        try:
+            with session.transaction() as tx:
+                sc = tx.bucket(bucket).schema(schema)
+                sc.table(table_name).drop()
+                sc.drop()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
 # Standard test class
 # ---------------------------------------------------------------------------
 
@@ -65,65 +137,7 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
 
     @pytest.fixture()
     def vectorstore(self) -> Generator[VectorStore, None, None]:  # type: ignore[override]
-        """Yield an empty VastDBVectorStore backed by a dedicated, isolated test table.
-
-        Creates a uniquely-named schema and table on the test VAST cluster before
-        yielding, and drops both unconditionally in the finally block.
-
-        Required env vars: VASTDB__ENDPOINT, VASTDB__ACCESS_KEY, VASTDB__SECRET_KEY,
-        VASTDB__BUCKET. Optional: VASTDB__ADBC_DRIVER_PATH + VASTDB__ADBC_ENDPOINT
-        enable native ADBC vector search via array_distance() SQL (no vector
-        index required). Load env vars via your IDE's run config, `direnv`, or
-        `set -a && source .env && set +a`.
-        """
-        endpoint = os.environ["VASTDB__ENDPOINT"]
-        access_key = os.environ["VASTDB__ACCESS_KEY"]
-        secret_key = os.environ["VASTDB__SECRET_KEY"]
-        bucket = os.environ["VASTDB__BUCKET"]
-        run_id = uuid.uuid4().hex[:12]
-        schema = f"lc_vs_it_{run_id}"
-        table_name = f"lc_vs_it_{run_id}"
-
-        adbc_driver_path = os.environ.get("VASTDB__ADBC_DRIVER_PATH")
-        adbc_endpoint = os.environ.get("VASTDB__ADBC_ENDPOINT")
-        # Note: adbc_driver is NOT passed to vastdb.connect() — the SDK would route
-        # it through the HTTPS endpoint (TLS issues). VastDBVectorStore opens its own
-        # ADBC connection directly to adbc_endpoint (the QueryEngine IP).
-        session = vastdb.connect(
-            endpoint=endpoint,
-            access=access_key,
-            secret=secret_key,
-            timeout=10,
-            ssl_verify=False,
-            backoff_config=BackoffConfig(max_tries=2, max_time=15.0),
-        )
-
-        with session.transaction() as tx:
-            b = tx.bucket(bucket)
-            b.create_schema(schema)
-            b.schema(schema).create_table(table_name, _ARROW_SCHEMA)
-
-        store = VastDBVectorStore(
-            embedding=self.get_embeddings(),
-            session=session,
-            bucket=bucket,
-            schema=schema,
-            table_name=table_name,
-            adbc_driver_path=adbc_driver_path,
-            adbc_endpoint=adbc_endpoint,
-            access_key=access_key,
-            secret_key=secret_key,
-        )
-        try:
-            yield store
-        finally:
-            try:
-                with session.transaction() as tx:
-                    sc = tx.bucket(bucket).schema(schema)
-                    sc.table(table_name).drop()
-                    sc.drop()
-            except Exception:
-                pass
+        yield from _build_vectorstore()
 
     # -----------------------------------------------------------------------
     # Epic 2 deferred findings — dedicated test cases (AC: #6)
@@ -276,3 +290,70 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
         result = chain.invoke("What does VAST store?")
         assert isinstance(result, str)
         assert "VAST is great for vectors" in result
+
+
+# ---------------------------------------------------------------------------
+# Retriever standard test class
+# ---------------------------------------------------------------------------
+
+
+class TestVastDBRetrieverIntegration(RetrieversIntegrationTests):
+    """LangChain standard integration test suite for the retriever surface.
+
+    Exercises `store.as_retriever()` against the upstream `RetrieversIntegrationTests`
+    contract so future LangChain tightenings are caught automatically — the same
+    rationale we rely on for `VectorStoreIntegrationTests`. The retriever is
+    `VectorStoreRetriever` (inherited from langchain-core); we wire the standard
+    suite's `retriever_constructor` hook to a factory that seeds the existing
+    vectorstore fixture and returns `store.as_retriever(search_kwargs={"k": k})`.
+    """
+
+    @pytest.fixture()
+    def vectorstore(self) -> Generator[VectorStore, None, None]:
+        yield from _build_vectorstore()
+
+    @pytest.fixture(autouse=True)
+    def _seed_and_bind(self, vectorstore: VectorStore) -> None:
+        """Seed 5 docs and bind the store so `retriever_constructor` can reach it."""
+        vectorstore.add_texts(["one", "two", "three", "four", "five"])
+        self._vs = vectorstore
+
+    @property
+    def retriever_constructor(self) -> Any:  # type: ignore[override]
+        """Factory that builds a VectorStoreRetriever over the seeded fixture store.
+
+        Typed `Any` because the upstream contract expects `type[BaseRetriever]` but
+        only *calls* the attribute — any callable returning a `BaseRetriever`
+        satisfies the test suite. `k` maps to `search_kwargs["k"]`; all other kwargs
+        pass through to `as_retriever(**kwargs)` as retriever-level params so future
+        upstream additions (e.g. `search_type="mmr"`) land on the right surface.
+        """
+        vs = self._vs
+
+        def factory(**kwargs: Any) -> BaseRetriever:
+            k = kwargs.pop("k", 4)
+            search_kwargs = {"k": k, **kwargs.pop("search_kwargs", {})}
+            return vs.as_retriever(search_kwargs=search_kwargs, **kwargs)
+
+        return factory
+
+    @property
+    def retriever_constructor_params(self) -> dict[str, Any]:
+        return {"k": 3}
+
+    @property
+    def retriever_query_example(self) -> str:
+        return "one"
+
+    @pytest.mark.xfail(
+        reason=(
+            "VastDB SDK is sync-only; async retrieval, if it succeeds, does so via "
+            "langchain-core's executor fallback (asimilarity_search -> run_in_executor). "
+            "strict=False because XPASS is acceptable — we just don't commit to the surface."
+        ),
+        strict=False,
+    )
+    async def test_ainvoke_returns_documents(
+        self, retriever: BaseRetriever
+    ) -> None:
+        await super().test_ainvoke_returns_documents(retriever)

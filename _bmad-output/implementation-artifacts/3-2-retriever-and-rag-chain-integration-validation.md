@@ -191,3 +191,7 @@ Claude Opus 4.6
 
 - **X1.** `format_docs` helper duplicated between unit test and integration test — acceptable test isolation; extracting a shared helper adds coupling for two 1-line functions.
 - **X2.** `test_retriever_with_text_filter` uses `len(docs) >= 1` instead of `== 1` — `>= 1` is more resilient against edge cases in the fallback search path where filtering precision may vary.
+
+### Follow-ups
+
+- **F1 (2026-04-16, closed via quick-dev):** Retrofit LangChain's standard `RetrieversIntegrationTests` suite — originally missed during story implementation despite symmetry with `VectorStoreIntegrationTests`. Added `TestVastDBRetrieverIntegration` in `tests/integration_tests/test_vectorstore.py` wiring `retriever_constructor` to the existing `vectorstore` fixture (via autouse seed+bind). Extracted `_build_vectorstore()` module-level generator to share setup across classes with zero drift. `test_ainvoke_returns_documents` xfail'd (sync-only SDK); other 3 standard tests active. Motivation: insight-engine composes retrievers as first-class LCEL units — needed upstream contract drift detection on that surface.
