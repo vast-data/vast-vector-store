@@ -7,6 +7,7 @@ from collections.abc import Generator
 import pyarrow as pa
 import pytest
 import vastdb
+from langchain_core.documents import Document
 from langchain_core.vectorstores import VectorStore
 from langchain_tests.integration_tests import VectorStoreIntegrationTests
 from langchain_tests.integration_tests.vectorstores import EMBEDDING_SIZE
@@ -196,3 +197,82 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
         assert not all(s == 0.0 for s in scores), (
             "All scores are 0.0 — $distance passthrough from table.vector_search may be broken"
         )
+
+    # -----------------------------------------------------------------------
+    # Story 3.2: Retriever & RAG chain integration validation
+    # -----------------------------------------------------------------------
+
+    def test_as_retriever_returns_documents(self, vectorstore: VectorStore) -> None:
+        """AC #1, #2: as_retriever().invoke() returns correct Documents from live VAST."""
+        from langchain_core.vectorstores import VectorStoreRetriever
+
+        vectorstore.add_texts(
+            ["alpha document", "beta document", "gamma document"],
+            ids=["r-1", "r-2", "r-3"],
+        )
+        retriever = vectorstore.as_retriever()
+        assert isinstance(retriever, VectorStoreRetriever)
+
+        docs = retriever.invoke("alpha")
+        assert isinstance(docs, list)
+        assert len(docs) > 0
+        assert all(isinstance(d, Document) for d in docs)
+        # The retriever should preserve Document.id
+        assert all(d.id is not None for d in docs)
+
+    def test_retriever_custom_k(self, vectorstore: VectorStore) -> None:
+        """AC #3: Retriever with search_kwargs={"k": 2} returns at most 2 docs."""
+        vectorstore.add_texts(
+            ["one", "two", "three", "four", "five"],
+            ids=["k-1", "k-2", "k-3", "k-4", "k-5"],
+        )
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 2})
+        docs = retriever.invoke("one")
+        assert len(docs) == 2
+
+    def test_retriever_with_text_filter(self, vectorstore: VectorStore) -> None:
+        """AC #3: Retriever with search_kwargs={"filter": {"text": ...}} filters correctly."""
+        vectorstore.add_texts(
+            ["target text", "other text", "more text"],
+            ids=["f-1", "f-2", "f-3"],
+        )
+        retriever = vectorstore.as_retriever(
+            search_kwargs={"k": 10, "filter": {"text": "target text"}}
+        )
+        docs = retriever.invoke("text")
+        assert len(docs) >= 1
+        assert all(d.page_content == "target text" for d in docs)
+
+    def test_lcel_rag_chain_with_live_retriever(
+        self, vectorstore: VectorStore
+    ) -> None:
+        """AC #4: LCEL chain with live retriever + FakeListLLM executes end-to-end."""
+        from langchain_core.language_models import FakeListLLM
+        from langchain_core.output_parsers import StrOutputParser
+        from langchain_core.prompts import ChatPromptTemplate
+        from langchain_core.runnables import RunnablePassthrough
+
+        vectorstore.add_texts(
+            ["VAST Database stores vector embeddings efficiently"],
+            ids=["chain-1"],
+        )
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 1})
+
+        prompt = ChatPromptTemplate.from_template(
+            "Answer based on context:\n{context}\n\nQuestion: {question}"
+        )
+
+        def format_docs(docs):
+            return "\n".join(d.page_content for d in docs)
+
+        llm = FakeListLLM(responses=["VAST is great for vectors"])
+        chain = (
+            {"context": retriever | format_docs, "question": RunnablePassthrough()}
+            | prompt
+            | llm
+            | StrOutputParser()
+        )
+
+        result = chain.invoke("What does VAST store?")
+        assert isinstance(result, str)
+        assert "VAST is great for vectors" in result
