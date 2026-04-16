@@ -570,3 +570,102 @@ def test_adbc_table_path_double_quotes_in_bucket_are_escaped(
 
     executed_sql = mock_cursor.execute.call_args[0][0]
     assert 'b""ucket' in executed_sql
+
+
+# ---------------------------------------------------------------------------
+# Story 3.2: Retriever & RAG chain integration validation (unit tests)
+# ---------------------------------------------------------------------------
+
+
+def test_as_retriever_returns_retriever_instance(vectorstore):
+    """AC #1: as_retriever() returns a VectorStoreRetriever."""
+    from langchain_core.vectorstores import VectorStoreRetriever
+
+    retriever = vectorstore.as_retriever()
+    assert isinstance(retriever, VectorStoreRetriever)
+
+
+def test_retriever_invoke_returns_documents(vectorstore):
+    """AC #2: retriever.invoke() returns list[Document] via similarity_search."""
+    rows = [
+        ({"id": "1", "text": "hello world", "metadata": '{"k": "v"}'}, 0.1),
+        ({"id": "2", "text": "foo bar", "metadata": "{}"}, 0.5),
+    ]
+    retriever = vectorstore.as_retriever()
+    with patch.object(vectorstore, "_do_vector_search", return_value=rows):
+        docs = retriever.invoke("hello")
+
+    assert isinstance(docs, list)
+    assert len(docs) == 2
+    assert all(isinstance(d, Document) for d in docs)
+    assert docs[0].page_content == "hello world"
+    assert docs[1].page_content == "foo bar"
+
+
+def test_retriever_invoke_empty_store(vectorstore):
+    """AC #2: retriever on empty store returns []."""
+    retriever = vectorstore.as_retriever()
+    with patch.object(vectorstore, "_do_vector_search", return_value=[]):
+        docs = retriever.invoke("anything")
+
+    assert docs == []
+
+
+def test_retriever_with_k_kwarg(vectorstore):
+    """AC #3: as_retriever(search_kwargs={"k": 2}) passes k to similarity_search."""
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 2})
+    with patch.object(vectorstore, "similarity_search", return_value=[]) as mock_ss:
+        retriever.invoke("query")
+
+    mock_ss.assert_called_once()
+    call_kwargs = mock_ss.call_args
+    assert call_kwargs.kwargs.get("k") == 2 or call_kwargs[1].get("k") == 2
+
+
+def test_retriever_with_filter_kwarg(vectorstore):
+    """AC #3: as_retriever(search_kwargs={"filter": {...}}) passes filter."""
+    retriever = vectorstore.as_retriever(
+        search_kwargs={"filter": {"category": "news"}}
+    )
+    with patch.object(vectorstore, "similarity_search", return_value=[]) as mock_ss:
+        retriever.invoke("query")
+
+    mock_ss.assert_called_once()
+    call_kwargs = mock_ss.call_args
+    assert call_kwargs.kwargs.get("filter") == {"category": "news"} or \
+        call_kwargs[1].get("filter") == {"category": "news"}
+
+
+def test_lcel_rag_chain_executes(vectorstore):
+    """AC #4: LCEL chain retriever | prompt | llm executes successfully."""
+    from langchain_core.language_models import FakeListLLM
+    from langchain_core.output_parsers import StrOutputParser
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.runnables import RunnablePassthrough
+
+    rows = [
+        ({"id": "1", "text": "VAST is a database", "metadata": "{}"}, 0.1),
+    ]
+    retriever = vectorstore.as_retriever()
+
+    prompt = ChatPromptTemplate.from_template(
+        "Answer based on context:\n{context}\n\nQuestion: {question}"
+    )
+
+    def format_docs(docs):
+        return "\n".join(d.page_content for d in docs)
+
+    llm = FakeListLLM(responses=["This is a test answer"])
+    chain = (
+        {"context": retriever | format_docs, "question": RunnablePassthrough()}
+        | prompt
+        | llm
+        | StrOutputParser()
+    )
+
+    with patch.object(vectorstore, "_do_vector_search", return_value=rows):
+        result = chain.invoke("What is VAST?")
+
+    assert isinstance(result, str)
+    assert "This is a test answer" in result
+
