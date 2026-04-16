@@ -62,7 +62,7 @@ development_status:
   epic-3: in-progress
   3-1-langchain-standard-integration-test-suite: done
   3-1a-live-cluster-correctness-fixes: done
-  3-2-retriever-and-rag-chain-integration-validation: review
+  3-2-retriever-and-rag-chain-integration-validation: done
   epic-3-retrospective: optional
 
   # Epic 4: Documentation, Examples & Publication

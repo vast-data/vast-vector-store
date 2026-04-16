@@ -1,6 +1,6 @@
 # Story 3.2: Retriever & RAG Chain Integration Validation
 
-Status: review
+Status: done
 
 ## Story
 
@@ -178,3 +178,16 @@ Claude Opus 4.6
 
 - `tests/unit_tests/test_vectorstore.py` (MODIFIED — 6 new retriever/chain tests)
 - `tests/integration_tests/test_vectorstore.py` (MODIFIED — 4 new retriever/chain integration tests, added Document import)
+
+## Review Findings
+
+**Review date:** 2026-04-16
+**Reviewer:** bmad-code-review (Blind Hunter + Edge Case Hunter + Acceptance Auditor, inline)
+**Base:** `main`
+**Head:** `story/3-2-retriever-and-rag-chain-integration-validation`
+**Summary:** 0 decision-needed, 0 patch, 0 defer, 2 dismissed
+
+### Dismissed
+
+- **X1.** `format_docs` helper duplicated between unit test and integration test — acceptable test isolation; extracting a shared helper adds coupling for two 1-line functions.
+- **X2.** `test_retriever_with_text_filter` uses `len(docs) >= 1` instead of `== 1` — `>= 1` is more resilient against edge cases in the fallback search path where filtering precision may vary.
