@@ -6,12 +6,12 @@ default JSON metadata column with typed columns (category, source).
 
 Prerequisites:
     - A running VAST cluster with vector search support
-    - Environment variables: VASTDB_ENDPOINT, VASTDB_ACCESS_KEY, VASTDB_SECRET_KEY
+    - Environment variables: VASTDB__ENDPOINT, VASTDB__ACCESS_KEY, VASTDB__SECRET_KEY
 
 Usage:
-    export VASTDB_ENDPOINT="http://your-vast-endpoint:443"
-    export VASTDB_ACCESS_KEY="your-access-key"
-    export VASTDB_SECRET_KEY="your-secret-key"
+    export VASTDB__ENDPOINT="http://your-vast-endpoint:443"
+    export VASTDB__ACCESS_KEY="your-access-key"
+    export VASTDB__SECRET_KEY="your-secret-key"
     python examples/subclassing.py
 """
 
@@ -32,9 +32,10 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # 1. Connection setup.
 # ---------------------------------------------------------------------------
-ENDPOINT = os.environ["VASTDB_ENDPOINT"]
-ACCESS_KEY = os.environ["VASTDB_ACCESS_KEY"]
-SECRET_KEY = os.environ["VASTDB_SECRET_KEY"]
+ENDPOINT = os.environ["VASTDB__ENDPOINT"]
+ACCESS_KEY = os.environ["VASTDB__ACCESS_KEY"]
+SECRET_KEY = os.environ["VASTDB__SECRET_KEY"]
+BUCKET = os.environ.get("VASTDB__BUCKET", "example-bucket")
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +134,7 @@ store = TypedMetadataStore.from_connection_params(
     endpoint=ENDPOINT,
     access_key=ACCESS_KEY,
     secret_key=SECRET_KEY,
-    bucket="example-bucket",
+    bucket=BUCKET,
     schema="example-schema",
     table_name="example-subclassing",
 )
