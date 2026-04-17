@@ -1,6 +1,6 @@
 # Story 4.2: Runnable Example Scripts
 
-Status: review
+Status: done
 
 ## Story
 
@@ -188,6 +188,13 @@ Since this example cannot run without an actual LLM, the script should show the 
 - [Source: _bmad-output/implementation-artifacts/4-1-readme-with-quickstart-configuration-and-subclassing-guide.md — Dev Notes]
 - [Source: src/langchain_vastdb/vectorstores.py — constructor, factory, hook signatures]
 - [Source: README.md — Examples section (lines 375-384)]
+
+## Review Findings
+
+**Review date:** 2026-04-17
+**Reviewer:** bmad-code-review (Blind Hunter + Edge Case Hunter + Acceptance Auditor, inline)
+
+Clean review — all layers passed. No patch, decision-needed, or defer findings.
 
 ## Dev Agent Record
 
