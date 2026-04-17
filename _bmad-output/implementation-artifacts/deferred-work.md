@@ -68,3 +68,11 @@
 ## Deferred from: code review of story 4-1-readme-with-quickstart-configuration-and-subclassing-guide (2026-04-17)
 
 - AC#4 requires a link to the migration guide in the README. The migration guide does not exist yet (Story 4.3). Add link when Story 4.3 is complete.
+
+## Deferred from: code review of example scripts fix (2026-04-17)
+
+- ADBC `_allowed_cols` in `_do_vector_search_adbc` hardcodes `{id, text}` — subclass typed columns (e.g., category, level) are rejected when ADBC is enabled. Should derive allowed columns from `_select_columns()` or make it overridable. Not triggered today (examples don't configure ADBC; macOS has no ADBC driver).
+- `from_connection_params` return type annotation is `-> VastDBVectorStore` but uses `cls(...)`, so subclass callers get the wrong static type. Should be `-> Self` (typing_extensions).
+- `test_credentials_not_stored_as_instance_attributes` test name is misleading — credentials ARE stored as `_access_key`/`_secret_key` (documented behavior). Test only checks there's no *public* attribute.
+- ADBC SQL path inconsistently quotes column names — `_id_column` is unquoted in SELECT while `_vector_column` is quoted. Edge-case breakage if column name is a SQL keyword.
+- ADBC SQL filter value interpolation uses bare `str(val)` for non-string/non-bool types. A type whitelist (str, int, float, bool) would close the injection edge case.

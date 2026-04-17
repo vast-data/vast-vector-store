@@ -6,21 +6,21 @@ default JSON metadata column with typed columns (category, source).
 
 Prerequisites:
     - A running VAST cluster with vector search support
-    - Environment variables: VASTDB__ENDPOINT, VASTDB__ACCESS_KEY, VASTDB__SECRET_KEY
+    - A ``.env`` file at the project root (loaded automatically)
 
 Usage:
-    export VASTDB__ENDPOINT="http://your-vast-endpoint:443"
-    export VASTDB__ACCESS_KEY="your-access-key"
-    export VASTDB__SECRET_KEY="your-secret-key"
     python examples/subclassing.py
 """
 
 from __future__ import annotations
 
 import os
+import uuid
 from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
+import vastdb
+from dotenv import load_dotenv
 from langchain_core.documents import Document
 from langchain_core.embeddings import FakeEmbeddings
 
@@ -28,6 +28,11 @@ from langchain_vastdb import VastDBVectorStore
 
 if TYPE_CHECKING:
     from vastdb.transaction import Transaction
+
+# ---------------------------------------------------------------------------
+# 0. Load environment variables from .env (same mechanism as conftest.py).
+# ---------------------------------------------------------------------------
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # 1. Connection setup.
@@ -45,9 +50,10 @@ BUCKET = os.environ.get("VASTDB__BUCKET", "example-bucket")
 #    this subclass stores "category" and "source" as separate typed columns.
 #    This enables efficient columnar filtering in VastDB.
 #
-#    Only two hooks need overriding:
+#    Only three hooks need overriding:
 #      - _insert_vectors: build a RecordBatch with typed columns
 #      - _row_to_document: reconstruct Document metadata from typed columns
+#      - _select_columns: tell the base class which columns to SELECT
 # ---------------------------------------------------------------------------
 
 
@@ -57,6 +63,15 @@ class TypedMetadataStore(VastDBVectorStore):
     # Column names for the typed metadata fields.
     CATEGORY_COLUMN = "category"
     SOURCE_COLUMN = "source"
+
+    def _select_columns(self) -> list[str]:
+        """Return typed metadata columns instead of the JSON metadata column."""
+        return [
+            self._id_column,
+            self._text_column,
+            self.CATEGORY_COLUMN,
+            self.SOURCE_COLUMN,
+        ]
 
     def _insert_vectors(
         self,
@@ -123,41 +138,88 @@ class TypedMetadataStore(VastDBVectorStore):
 
 
 # ---------------------------------------------------------------------------
-# 3. Create a TypedMetadataStore instance and add documents.
-#    The table must have "category" and "source" columns pre-created
-#    (or VastDB must be configured to auto-create columns on insert).
+# 3. Create an isolated schema and table for this example run.
+#    The table includes typed "category" and "source" columns instead of
+#    the default "metadata" JSON column.
 # ---------------------------------------------------------------------------
-embedding = FakeEmbeddings(size=1536)
+VECTOR_DIM = 1536
+embedding = FakeEmbeddings(size=VECTOR_DIM)
 
-store = TypedMetadataStore.from_connection_params(
-    embedding=embedding,
-    endpoint=ENDPOINT,
-    access_key=ACCESS_KEY,
-    secret_key=SECRET_KEY,
-    bucket=BUCKET,
-    schema="example-schema",
-    table_name="example-subclassing",
+run_id = uuid.uuid4().hex[:8]
+SCHEMA = f"example_subcls_{run_id}"
+TABLE = f"example_subcls_{run_id}"
+
+TABLE_SCHEMA = pa.schema(
+    [
+        pa.field("id", pa.string()),
+        pa.field("text", pa.string()),
+        pa.field(
+            "vector",
+            pa.list_(
+                pa.field("item", pa.float32(), nullable=False), VECTOR_DIM
+            ),
+        ),
+        pa.field("category", pa.string()),
+        pa.field("source", pa.string()),
+    ]
 )
 
-ids = store.add_texts(
-    texts=[
-        "VastDB stores columnar data for analytics.",
-        "LangChain enables building LLM-powered applications.",
-        "Vector search uses embeddings to find similar content.",
-    ],
-    metadatas=[
-        {"category": "database", "source": "vastdb-docs"},
-        {"category": "framework", "source": "langchain-docs"},
-        {"category": "search", "source": "ml-handbook"},
-    ],
+session = vastdb.connect(
+    endpoint=ENDPOINT, access=ACCESS_KEY, secret=SECRET_KEY, ssl_verify=False
 )
-print(f"Added {len(ids)} documents with typed metadata columns.")
+with session.transaction() as tx:
+    b = tx.bucket(BUCKET)
+    b.create_schema(SCHEMA)
+    b.schema(SCHEMA).create_table(TABLE, TABLE_SCHEMA)
 
-# ---------------------------------------------------------------------------
-# 4. Search and observe that metadata comes from typed columns.
-# ---------------------------------------------------------------------------
-results = store.similarity_search("database analytics", k=2)
-print(f"\nSearch results ({len(results)} docs):")
-for doc in results:
-    print(f"  - {doc.page_content!r}")
-    print(f"    category={doc.metadata['category']}, source={doc.metadata['source']}")
+try:
+    # -------------------------------------------------------------------
+    # 4. Create a TypedMetadataStore instance and add documents.
+    # -------------------------------------------------------------------
+    store = TypedMetadataStore.from_connection_params(
+        embedding=embedding,
+        endpoint=ENDPOINT,
+        access_key=ACCESS_KEY,
+        secret_key=SECRET_KEY,
+        bucket=BUCKET,
+        schema=SCHEMA,
+        table_name=TABLE,
+        ssl_verify=False,
+    )
+
+    ids = store.add_texts(
+        texts=[
+            "VastDB stores columnar data for analytics.",
+            "LangChain enables building LLM-powered applications.",
+            "Vector search uses embeddings to find similar content.",
+        ],
+        metadatas=[
+            {"category": "database", "source": "vastdb-docs"},
+            {"category": "framework", "source": "langchain-docs"},
+            {"category": "search", "source": "ml-handbook"},
+        ],
+    )
+    print(f"Added {len(ids)} documents with typed metadata columns.")
+
+    # -------------------------------------------------------------------
+    # 5. Search and observe that metadata comes from typed columns.
+    # -------------------------------------------------------------------
+    results = store.similarity_search("database analytics", k=2)
+    print(f"\nSearch results ({len(results)} docs):")
+    for doc in results:
+        print(f"  - {doc.page_content!r}")
+        print(
+            f"    category={doc.metadata['category']}, source={doc.metadata['source']}"
+        )
+
+finally:
+    # -------------------------------------------------------------------
+    # Cleanup: drop the table and schema created for this run.
+    # -------------------------------------------------------------------
+    try:
+        with session.transaction() as tx:
+            sc = tx.bucket(BUCKET).schema(SCHEMA)
+            sc.table(TABLE).drop()
+            sc.drop()
+    except Exception:
+        pass

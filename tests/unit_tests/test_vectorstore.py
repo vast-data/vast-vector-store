@@ -90,7 +90,7 @@ def test_from_connection_params_patches_vastdb_connect(mock_session, fake_embedd
             table_name="t",
         )
         mock_connect.assert_called_once_with(
-            endpoint="http://vast:8080", access_key="ak", secret_key="sk"
+            endpoint="http://vast:8080", access="ak", secret="sk", ssl_verify=True
         )
     assert store._session is mock_session
 

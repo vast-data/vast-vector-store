@@ -39,13 +39,14 @@ class VastDBVectorStore(VectorStore):
     - Configurable column names for id, text, vector, and metadata columns.
     - The ``embeddings`` property exposing the configured ``Embeddings`` model.
 
-    Five protected hook methods are available for subclass customization:
+    Six protected hook methods are available for subclass customization:
 
     - ``_insert_vectors`` — customize record insertion
     - ``_vector_search`` — customize similarity search behavior
     - ``_delete_by_ids`` — customize document deletion
     - ``_get_by_ids`` — customize document retrieval by ID
     - ``_row_to_document`` — customize row-to-Document conversion
+    - ``_select_columns`` — customize columns for full-row retrieval
 
     Example:
         .. code-block:: python
@@ -135,6 +136,7 @@ class VastDBVectorStore(VectorStore):
         table_name: str,
         adbc_driver_path: str | None = None,
         adbc_endpoint: str | None = None,
+        ssl_verify: bool = True,
         **kwargs: Any,
     ) -> VastDBVectorStore:
         """Create a VastDBVectorStore from VAST connection parameters.
@@ -155,6 +157,8 @@ class VastDBVectorStore(VectorStore):
                 for native ADBC vector search.
             adbc_endpoint: Optional ADBC/QueryEngine endpoint (separate from
                 the HTTP endpoint).
+            ssl_verify: Whether to verify SSL certificates. Set to ``False``
+                for self-signed certificates. Defaults to ``True``.
             **kwargs: Additional keyword arguments forwarded to ``__init__``
                 (e.g., custom column names).
 
@@ -162,7 +166,10 @@ class VastDBVectorStore(VectorStore):
             A configured ``VastDBVectorStore`` instance.
         """
         session = vastdb.connect(
-            endpoint=endpoint, access_key=access_key, secret_key=secret_key
+            endpoint=endpoint,
+            access=access_key,
+            secret=secret_key,
+            ssl_verify=ssl_verify,
         )
         return cls(
             embedding=embedding,
@@ -273,6 +280,21 @@ class VastDBVectorStore(VectorStore):
         """
         self._metadata_loaded = False
         self._table_metadata = TableMetadata(ref=self._table_ref)
+
+    def _select_columns(self) -> list[str]:
+        """Return column names for full-row retrieval (excludes vectors).
+
+        Used by ``_vector_search`` and ``_get_by_ids`` to determine which
+        columns to SELECT when fetching document data. The default returns
+        id, text, and metadata columns.
+
+        Subclasses that replace the JSON metadata column with typed columns
+        should override this to return their custom column names.
+
+        Returns:
+            List of column name strings.
+        """
+        return [self._id_column, self._text_column, self._metadata_column]
 
     def add_texts(
         self,
@@ -581,7 +603,7 @@ class VastDBVectorStore(VectorStore):
             columns for a matched document.
         """
         predicate = ibis._[self._id_column].isin(ids)
-        columns = [self._id_column, self._text_column, self._metadata_column]
+        columns = self._select_columns()
         if tx is not None:
             table = self._get_table(tx)
             reader = table.select(columns=columns, predicate=predicate)
@@ -650,7 +672,7 @@ class VastDBVectorStore(VectorStore):
         Returns:
             List of (row_dict, distance_score) tuples.
         """
-        columns = [self._id_column, self._text_column, self._metadata_column]
+        columns = self._select_columns()
         if tx is not None:
             return self._do_vector_search(tx, query_vector, k, columns, predicate, filter_dict)
 
