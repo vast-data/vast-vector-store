@@ -9,6 +9,8 @@ native vector indexing.
 
 **Compatibility:** Python 3.10 - 3.13 | langchain-core >= 0.3 | vastdb >= 2.0.3
 
+**Status:** Alpha (v0.0.1). API may change between minor releases.
+
 **License:** Apache-2.0
 
 ## Requirements
@@ -81,7 +83,14 @@ the instance.
 ### Option 3: Create a store and add texts in one call
 
 ```python
+import vastdb
 from langchain_vastdb import VastDBVectorStore
+
+session = vastdb.connect(
+    endpoint="http://vast-cluster:8070",
+    access_key="YOUR_ACCESS_KEY",
+    secret_key="YOUR_SECRET_KEY",
+)
 
 store = VastDBVectorStore.from_texts(
     texts=["Paris is the capital of France.", "Berlin is the capital of Germany."],
@@ -111,7 +120,7 @@ for doc, score in scored:
     print(f"{doc.page_content} (distance: {score})")
 
 # Search with a pre-computed vector
-docs = store.similarity_search_by_vector(embedding_vector, k=2)
+docs = store.similarity_search_by_vector([0.1, 0.2, ...], k=2)
 
 # Retrieve documents by ID
 docs = store.get_by_ids(ids)
@@ -147,7 +156,7 @@ def format_docs(docs):
 chain = (
     {"context": retriever | format_docs, "question": RunnablePassthrough()}
     | prompt
-    | llm
+    | llm  # any LangChain-compatible LLM
     | StrOutputParser()
 )
 answer = chain.invoke("What is the capital of France?")
