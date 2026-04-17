@@ -381,8 +381,6 @@ See the [`examples/`](examples/) directory for runnable scripts:
 - `subclassing.py` -- custom hook overrides for typed metadata
 - `filtered_search.py` -- metadata filtering patterns
 
-*(Coming in a future release.)*
-
 ## Development
 
 Clone the repository and install dependencies with [uv](https://docs.astral.sh/uv/):
