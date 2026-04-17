@@ -64,3 +64,7 @@
 - **DF-j.** Fallback scoring loop assumes `isinstance(vec, list)`. If the Arrow reader returns a numpy array or tuple for a fixed_size_list column on some vastdb version, every row is silently skipped. Coerce via `list(vec)` before the length check. (`vectorstores.py:819-823`)
 - **DF-k.** `row[text_column]` returning None yields `Document(page_content=None)` — pydantic rejects. Symmetric with the AI-2 NULL metadata xfail; fold into that fix. (`vectorstores.py:862-865`)
 - **DF-l.** Empty-string id `""` is accepted by the None-replace path. Row is inserted with an empty id, then can't be safely round-tripped. Reject empty strings in the caller-supplied ids loop. (`vectorstores.py:314-317`)
+
+## Deferred from: code review of story 4-1-readme-with-quickstart-configuration-and-subclassing-guide (2026-04-17)
+
+- AC#4 requires a link to the migration guide in the README. The migration guide does not exist yet (Story 4.3). Add link when Story 4.3 is complete.

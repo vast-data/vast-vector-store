@@ -1,6 +1,6 @@
 # Story 4.1: README with Quickstart, Configuration & Subclassing Guide
 
-Status: review
+Status: done
 
 ## Story
 
@@ -178,6 +178,18 @@ Public methods (inherited from `VectorStore` + implemented):
 - [Source: _bmad-output/planning-artifacts/architecture.md#Project Structure & Boundaries]
 - [Source: _bmad-output/planning-artifacts/prd.md#Documentation]
 - [Source: src/langchain_vastdb/vectorstores.py — actual constructor and hook signatures]
+
+## Review Findings
+
+**Review date:** 2026-04-17
+**Reviewer:** bmad-code-review (Blind Hunter + Edge Case Hunter + Acceptance Auditor, inline)
+**Base:** `main`
+
+- [x] [Review][Patch] Undefined `llm` in RAG chain example [README.md] — add comment clarifying `llm` placeholder
+- [x] [Review][Patch] Undefined `embedding_vector` in similarity_search_by_vector example [README.md] — add comment
+- [x] [Review][Patch] Undefined `session` in from_texts example [README.md] — add session creation context
+- [x] [Review][Patch] Alpha status note removed [README.md] — restore status note in project description
+- [x] [Review][Defer] AC#4 missing link to migration guide [README.md] — deferred, migration guide is Story 4.3
 
 ## Dev Agent Record
 
