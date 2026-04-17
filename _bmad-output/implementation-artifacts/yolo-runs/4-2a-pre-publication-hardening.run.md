@@ -6,7 +6,7 @@ branch: story/4-2a-pre-publication-hardening
 default_branch: main
 remote_host: gitlab
 status: in-progress
-current_stage: stage-2-branch
+current_stage: stage-4-review
 review_iters_used: 0
 ci_iters_used: 0
 started: 2026-04-17
