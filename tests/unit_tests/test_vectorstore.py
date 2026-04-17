@@ -117,7 +117,7 @@ def test_embeddings_property_returns_embedding_instance(vectorstore, fake_embedd
     assert vectorstore.embeddings is fake_embedding
 
 
-def test_credentials_not_stored_as_instance_attributes(mock_session, fake_embedding):
+def test_credentials_not_exposed_as_public_attributes(mock_session, fake_embedding):
     with patch("langchain_vastdb.vectorstores.vastdb.connect") as mock_connect:
         mock_connect.return_value = mock_session
         store = VastDBVectorStore.from_connection_params(
@@ -497,8 +497,6 @@ def test_adbc_filter_string_value_with_single_quote_is_escaped(
     adbc_vectorstore, mock_transaction
 ):
     """P1: single quotes in string filter values are escaped (SQL injection prevention)."""
-    from unittest.mock import MagicMock
-
     mock_dbapi = MagicMock()
     _cm = mock_dbapi.connect.return_value.__enter__.return_value
     mock_cursor = _cm.cursor.return_value.__enter__.return_value
@@ -507,17 +505,7 @@ def test_adbc_filter_string_value_with_single_quote_is_escaped(
         "distance": [],
     }
 
-    import sys
-
-    mock_adbc_module = MagicMock()
-    mock_adbc_module.dbapi = mock_dbapi
-
-    with patch.dict(
-        sys.modules,
-        {
-            "adbc_driver_manager": mock_adbc_module,
-        },
-    ):
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
         adbc_vectorstore._do_vector_search_adbc(
             mock_transaction,
             [0.1, 0.2, 0.3],
@@ -536,8 +524,6 @@ def test_adbc_table_path_double_quotes_in_bucket_are_escaped(
     mock_session, fake_embedding, mock_transaction
 ):
     """P2: double-quotes in bucket/schema/table names are doubled in the SQL path."""
-    from unittest.mock import MagicMock
-
     store = VastDBVectorStore(
         embedding=fake_embedding,
         session=mock_session,
@@ -560,12 +546,7 @@ def test_adbc_table_path_double_quotes_in_bucket_are_escaped(
         "distance": [],
     }
 
-    import sys
-
-    mock_adbc_module = MagicMock()
-    mock_adbc_module.dbapi = mock_dbapi
-
-    with patch.dict(sys.modules, {"adbc_driver_manager": mock_adbc_module}):
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
         store._do_vector_search_adbc(mock_transaction, [0.1, 0.2, 0.3], k=4, filter_dict=None)
 
     executed_sql = mock_cursor.execute.call_args[0][0]
@@ -668,4 +649,125 @@ def test_lcel_rag_chain_executes(vectorstore):
 
     assert isinstance(result, str)
     assert "This is a test answer" in result
+
+
+# ---------------------------------------------------------------------------
+# Story 4-2a: Pre-publication hardening tests
+# ---------------------------------------------------------------------------
+
+# --- AC1: NULL-safe _row_to_document ---
+
+
+def test_row_to_document_none_metadata_returns_empty_dict(vectorstore):
+    """AI-2: None metadata column should produce empty dict, not raise TypeError."""
+    row = {"id": "1", "text": "hello", "metadata": None}
+    doc = vectorstore._row_to_document(row)
+    assert doc.page_content == "hello"
+    assert doc.metadata == {}
+
+
+def test_row_to_document_missing_metadata_key_returns_empty_dict(vectorstore):
+    """Missing metadata key should produce empty dict."""
+    row = {"id": "1", "text": "hello"}
+    doc = vectorstore._row_to_document(row)
+    assert doc.metadata == {}
+
+
+def test_row_to_document_none_text_returns_empty_string(vectorstore):
+    """DF-k: None text column should produce empty string, not Document(page_content=None)."""
+    row = {"id": "1", "text": None, "metadata": "{}"}
+    doc = vectorstore._row_to_document(row)
+    assert doc.page_content == ""
+
+
+def test_row_to_document_missing_text_key_returns_empty_string(vectorstore):
+    """Missing text key should produce empty string."""
+    row = {"id": "1", "metadata": "{}"}
+    doc = vectorstore._row_to_document(row)
+    assert doc.page_content == ""
+
+
+# --- AC2: Input validation ---
+
+
+def test_add_texts_empty_string_id_raises(vectorstore):
+    """DF-l: Empty-string IDs should be rejected."""
+    with pytest.raises(ValueError, match="Empty-string IDs"):
+        vectorstore.add_texts(["hello"], ids=[""])
+
+
+def test_add_texts_mixed_empty_and_valid_ids_raises(vectorstore):
+    """DF-l: Empty string among valid IDs should be rejected."""
+    with pytest.raises(ValueError, match="Empty-string IDs"):
+        vectorstore.add_texts(["a", "b", "c"], ids=["x", "", "y"])
+
+
+def test_similarity_search_k_float_raises(vectorstore):
+    """DF-g: Float k should raise TypeError."""
+    with pytest.raises(TypeError, match="k must be an integer"):
+        vectorstore.similarity_search("q", k=4.0)
+
+
+def test_similarity_search_k_bool_raises(vectorstore):
+    """DF-g: Bool k should raise TypeError."""
+    with pytest.raises(TypeError, match="k must be an integer"):
+        vectorstore.similarity_search("q", k=True)
+
+
+def test_similarity_search_with_score_k_float_raises(vectorstore):
+    """DF-g: Float k in similarity_search_with_score."""
+    with pytest.raises(TypeError, match="k must be an integer"):
+        vectorstore.similarity_search_with_score("q", k=4.0)
+
+
+def test_similarity_search_by_vector_k_bool_raises(vectorstore):
+    """DF-g: Bool k in similarity_search_by_vector."""
+    with pytest.raises(TypeError, match="k must be an integer"):
+        vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3], k=True)
+
+
+def test_adbc_available_rejects_whitespace_only_strings(mock_session, fake_embedding):
+    """DF-e: Whitespace-only credentials should not pass _adbc_available."""
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+        adbc_driver_path=" ",
+        adbc_endpoint="localhost",
+        access_key="ak",
+        secret_key="sk",
+    )
+    assert store._adbc_available() is False
+
+
+def test_adbc_available_rejects_whitespace_endpoint(mock_session, fake_embedding):
+    """DF-e: Whitespace-only endpoint should not pass _adbc_available."""
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+        adbc_driver_path="/path/to/driver.so",
+        adbc_endpoint="  ",
+        access_key="ak",
+        secret_key="sk",
+    )
+    assert store._adbc_available() is False
+
+
+# --- AC3: ADBC SQL type whitelist ---
+
+
+def test_adbc_filter_rejects_unsupported_type(adbc_vectorstore, mock_transaction):
+    """DF-9: Non-scalar filter values should raise TypeError."""
+    with pytest.raises(TypeError, match="unsupported type"):
+        adbc_vectorstore._do_vector_search_adbc(
+            mock_transaction,
+            [0.1, 0.2, 0.3],
+            k=4,
+            filter_dict={"id": [1, 2, 3]},
+        )
 

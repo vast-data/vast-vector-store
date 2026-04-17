@@ -22,4 +22,14 @@ sshpass -p "$VASTDB__ENDPOINT_PASSWORD" ssh \
   -L "${LOCAL_PORT}:${TUNNEL_HOST}:${TUNNEL_PORT}" \
   "${VASTDB__ENDPOINT_USERNAME}@${VASTDB__SSH_JUMP_HOST}"
 
-echo "Tunnel up: REST=https://localhost:${LOCAL_PORT}"
+# Wait for tunnel to be ready before returning (DF-6).
+MAX_WAIT=30
+for i in $(seq 1 "$MAX_WAIT"); do
+  if nc -z localhost "${LOCAL_PORT}" 2>/dev/null; then
+    echo "Tunnel up: REST=https://localhost:${LOCAL_PORT}"
+    exit 0
+  fi
+  sleep 1
+done
+echo "ERROR: tunnel to localhost:${LOCAL_PORT} not ready after ${MAX_WAIT}s" >&2
+exit 1

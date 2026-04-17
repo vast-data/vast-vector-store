@@ -158,14 +158,6 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
         assert len(docs) == 1
         assert docs[0].page_content == "hello world"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "AI-2: _row_to_document NULL metadata handling — "
-            "json.loads(None) raises TypeError when metadata column is NULL. "
-            "Deferred to follow-up story."
-        ),
-    )
     def test_row_with_null_metadata_roundtrips(
         self, vectorstore: VectorStore
     ) -> None:
@@ -173,8 +165,7 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
 
         Directly inserts a row with metadata=NULL via the VAST SDK, bypassing
         VastDBVectorStore._insert_vectors. Expects _row_to_document to handle
-        None gracefully. Currently xfail: json.loads(None) raises TypeError.
-        See deferred-work.md for the proposed fix.
+        None gracefully. Fixed in story 4-2a.
         """
         null_vector = pa.array(
             [[0.0] * VECTOR_DIM], type=pa.list_(pa.float32(), list_size=VECTOR_DIM)

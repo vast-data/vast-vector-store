@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import types
 import uuid
 from collections import Counter
 from typing import TYPE_CHECKING, Any
@@ -19,12 +20,26 @@ from vastdb.table_metadata import TableMetadata, TableRef, VectorIndex
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+    from typing import Self
 
     from vastdb.table import ITable
     from vastdb.transaction import Transaction
 
 
 _logger = logging.getLogger(__name__)
+
+# Lazy-cached ADBC dbapi module (DF-f: avoid per-call import overhead).
+_adbc_dbapi: types.ModuleType | None = None
+
+
+def _get_adbc_dbapi() -> types.ModuleType:
+    """Return the cached ``adbc_driver_manager.dbapi`` module, importing on first call."""
+    global _adbc_dbapi  # noqa: PLW0603
+    if _adbc_dbapi is None:
+        from adbc_driver_manager import dbapi
+
+        _adbc_dbapi = dbapi
+    return _adbc_dbapi
 
 
 class VastDBVectorStore(VectorStore):
@@ -138,7 +153,7 @@ class VastDBVectorStore(VectorStore):
         adbc_endpoint: str | None = None,
         ssl_verify: bool = True,
         **kwargs: Any,
-    ) -> VastDBVectorStore:
+    ) -> Self:
         """Create a VastDBVectorStore from VAST connection parameters.
 
         This is a convenience factory that builds a ``vastdb.Session``
@@ -196,7 +211,7 @@ class VastDBVectorStore(VectorStore):
         schema: str,
         table_name: str,
         **kwargs: Any,
-    ) -> VastDBVectorStore:
+    ) -> Self:
         """Create a VastDBVectorStore and add texts in a single call.
 
         Convenience factory that constructs a ``VastDBVectorStore`` instance
@@ -345,6 +360,12 @@ class VastDBVectorStore(VectorStore):
             # Document.id is None for some documents but not others).
             ids = [id_ if id_ is not None else str(uuid.uuid4()) for id_ in ids]
         if ids_provided:
+            empties = [i for i, id_ in enumerate(ids) if isinstance(id_, str) and not id_]
+            if empties:
+                raise ValueError(
+                    f"Empty-string IDs at positions {empties}; "
+                    "IDs must be non-empty strings"
+                )
             dupes = [id_ for id_, cnt in Counter(ids).items() if cnt > 1]
             if dupes:
                 raise ValueError(f"Duplicate IDs in supplied ids: {dupes}")
@@ -427,6 +448,8 @@ class VastDBVectorStore(VectorStore):
         Returns:
             List of Documents most similar to the query.
         """
+        if not isinstance(k, int) or isinstance(k, bool):
+            raise TypeError(f"k must be an integer, got {type(k).__name__}")
         if k <= 0:
             raise ValueError(f"k must be a positive integer, got {k}")
         filter_dict = kwargs.get("filter")
@@ -454,6 +477,8 @@ class VastDBVectorStore(VectorStore):
         Returns:
             List of (Document, distance_score) tuples, ordered by similarity.
         """
+        if not isinstance(k, int) or isinstance(k, bool):
+            raise TypeError(f"k must be an integer, got {type(k).__name__}")
         if k <= 0:
             raise ValueError(f"k must be a positive integer, got {k}")
         filter_dict = kwargs.get("filter")
@@ -484,6 +509,8 @@ class VastDBVectorStore(VectorStore):
         Returns:
             List of Documents most similar to the embedding.
         """
+        if not isinstance(k, int) or isinstance(k, bool):
+            raise TypeError(f"k must be an integer, got {type(k).__name__}")
         if k <= 0:
             raise ValueError(f"k must be a positive integer, got {k}")
         if not embedding:
@@ -638,12 +665,16 @@ class VastDBVectorStore(VectorStore):
         return result
 
     def _adbc_available(self) -> bool:
-        """Return True when all four ADBC parameters are configured."""
+        """Return True when all four ADBC parameters are configured and non-blank."""
         return bool(
             self._adbc_driver_path
+            and self._adbc_driver_path.strip()
             and self._adbc_endpoint
+            and self._adbc_endpoint.strip()
             and self._access_key
+            and self._access_key.strip()
             and self._secret_key
+            and self._secret_key.strip()
         )
 
     def _vector_search(
@@ -728,6 +759,15 @@ class VastDBVectorStore(VectorStore):
                     type(exc).__name__,
                     exc,
                 )
+            except Exception as exc:
+                # DF-a: step-2 SDK failure (_get_by_ids) propagates a non-ADBC
+                # exception. Fall back rather than crashing the search.
+                _logger.warning(
+                    "ADBC vector search step-2 SDK call failed (%s: %s); "
+                    "falling back to in-memory L2Sq scan.",
+                    type(exc).__name__,
+                    exc,
+                )
         return self._do_vector_search_fallback(tx, query_vector, k, columns, predicate)
 
     def _do_vector_search_adbc(
@@ -753,7 +793,7 @@ class VastDBVectorStore(VectorStore):
         Returns:
             List of (row_dict, distance_score) tuples ordered by distance.
         """
-        from adbc_driver_manager import dbapi as adbc_dbapi
+        adbc_dbapi = _get_adbc_dbapi()
 
         dim = len(query_vector)
         # Escape any embedded double-quotes in identifier components (P2).
@@ -765,7 +805,9 @@ class VastDBVectorStore(VectorStore):
         # Build WHERE clause from simple equality filters (P1, P7).
         # Scalar columns only: equality on _vector_column (float[]) is nonsensical
         # and equality on _metadata_column is position-dependent on JSON bytes.
-        _allowed_cols = {self._id_column, self._text_column}
+        # Derive allowed columns from _select_columns() so subclass-added typed
+        # columns (e.g., category, level) are accepted when ADBC is enabled.
+        _allowed_cols = set(self._select_columns())
         where_parts: list[str] = []
         if filter_dict:
             for col, val in filter_dict.items():
@@ -784,19 +826,28 @@ class VastDBVectorStore(VectorStore):
                 elif isinstance(val, str):
                     escaped = val.replace("'", "''")
                     quoted = f"'{escaped}'"
-                else:
+                elif isinstance(val, (int, float)):
                     quoted = str(val)
-                quoted_col = f'"{col}"'
+                else:
+                    raise TypeError(
+                        f"filter value for {col!r} has unsupported type "
+                        f"{type(val).__name__}; allowed types: str, int, float, bool"
+                    )
+                col_esc = col.replace('"', '""')
+                quoted_col = f'"{col_esc}"'
                 where_parts.append(f"{quoted_col} = {quoted}")
         where_clause = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
         # Step 1: ADBC SQL — fetch id + distance only (no heavy columns).
         # Cast to plain float to avoid np.float64(...) in the SQL literal.
         float_vec = [float(x) for x in query_vector]
-        # Quote the vector column — "vector" is a reserved type keyword in VAST's DuckDB dialect.
-        quoted_vec_col = f'"{self._vector_column}"'
+        # Quote all column identifiers to avoid SQL keyword conflicts.
+        id_col_esc = self._id_column.replace('"', '""')
+        quoted_id_col = f'"{id_col_esc}"'
+        vec_col_esc = self._vector_column.replace('"', '""')
+        quoted_vec_col = f'"{vec_col_esc}"'
         query = (
-            f"SELECT {self._id_column}, "
+            f"SELECT {quoted_id_col}, "
             f"array_distance({quoted_vec_col}::FLOAT[{dim}], "
             f"ARRAY{float_vec}::FLOAT[{dim}]) AS distance "
             f"FROM {table_path} "
@@ -822,6 +873,13 @@ class VastDBVectorStore(VectorStore):
             return []
 
         # Step 2: SDK — fetch full rows for the top-k IDs.
+        if len(ids) != len(set(ids)):
+            _logger.warning(
+                "ADBC step-1 returned %d IDs but only %d are unique; "
+                "duplicate IDs collapsed — results may be fewer than k.",
+                len(ids),
+                len(set(ids)),
+            )
         score_by_id = dict(zip(ids, distances))
         full_rows = self._get_by_ids(ids, tx=tx)
         row_by_id = {row[self._id_column]: row for row in full_rows}
@@ -852,12 +910,25 @@ class VastDBVectorStore(VectorStore):
 
         qdim = len(query_vector)
         scored: list[tuple[str, float]] = []
+        skipped = 0
         for row in all_rows:
             vec = row.get(self._vector_column)
+            # Coerce to list for Arrow arrays/tuples (DF-j).
+            if vec is not None and not isinstance(vec, list):
+                vec = list(vec)
             if not isinstance(vec, list) or len(vec) != qdim:
+                skipped += 1
                 continue
             score = sum((a - b) * (a - b) for a, b in zip(query_vector, vec))
             scored.append((row[self._id_column], score))
+        if skipped:
+            _logger.warning(
+                "Fallback vector search skipped %d/%d rows with missing or "
+                "dimension-mismatched vectors (expected dim=%d).",
+                skipped,
+                len(all_rows),
+                qdim,
+            )
 
         scored.sort(key=lambda x: x[1])
         top_ids = [id_ for id_, _ in scored[:k]]
@@ -896,7 +967,8 @@ class VastDBVectorStore(VectorStore):
         Returns:
             A LangChain ``Document`` with page_content and metadata.
         """
-        page_content = row.get(self._text_column, "")
-        metadata = json.loads(row.get(self._metadata_column, "{}"))
+        page_content = row.get(self._text_column) or ""
+        metadata_raw = row.get(self._metadata_column)
+        metadata = json.loads(metadata_raw) if metadata_raw is not None else {}
         doc_id = row.get(self._id_column)
         return Document(page_content=page_content, metadata=metadata, id=doc_id)
