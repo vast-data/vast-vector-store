@@ -167,16 +167,14 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
         VastDBVectorStore._insert_vectors. Expects _row_to_document to handle
         None gracefully. Fixed in story 4-2a.
         """
-        null_vector = pa.array(
-            [[0.0] * VECTOR_DIM], type=pa.list_(pa.float32(), list_size=VECTOR_DIM)
-        )
         batch = pa.RecordBatch.from_pydict(
             {
                 "id": ["test-null-meta"],
                 "text": ["test text"],
-                "vector": null_vector,
+                "vector": [[0.0] * VECTOR_DIM],
                 "metadata": pa.array([None], type=pa.string()),
-            }
+            },
+            schema=_ARROW_SCHEMA,
         )
         with vectorstore._session.transaction() as tx:  # type: ignore[union-attr]
             table = vectorstore._get_table(tx)  # type: ignore[union-attr]
