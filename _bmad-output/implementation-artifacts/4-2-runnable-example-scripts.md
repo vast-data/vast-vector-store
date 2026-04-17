@@ -1,6 +1,6 @@
 # Story 4.2: Runnable Example Scripts
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -18,41 +18,41 @@ so that I can copy and adapt working code for my use case.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Create `examples/basic_usage.py` (AC: #1, #5)
-  - [ ] 1.1: Import from `langchain_vastdb` and standard libs
-  - [ ] 1.2: Read connection credentials from env vars (`VASTDB_ENDPOINT`, `VASTDB_ACCESS_KEY`, `VASTDB_SECRET_KEY`)
-  - [ ] 1.3: Instantiate `VastDBVectorStore` using `from_connection_params()`
-  - [ ] 1.4: Add texts with metadata using `add_texts()`
-  - [ ] 1.5: Perform `similarity_search()` and print results
-  - [ ] 1.6: Retrieve documents by ID using `get_by_ids()` and print
-  - [ ] 1.7: Add step-by-step comments explaining each operation
-- [ ] Task 2: Create `examples/rag_pipeline.py` (AC: #2, #5)
-  - [ ] 2.1: Import from `langchain_vastdb`, `langchain_core`, env setup
-  - [ ] 2.2: Instantiate `VastDBVectorStore` using `from_connection_params()`
-  - [ ] 2.3: Add sample documents
-  - [ ] 2.4: Create retriever via `as_retriever()`
-  - [ ] 2.5: Build LCEL RAG chain (prompt | llm | output_parser) with retriever
-  - [ ] 2.6: Invoke the chain with a sample question and print result
-  - [ ] 2.7: Add comments explaining each LCEL step
-- [ ] Task 3: Create `examples/subclassing.py` (AC: #3, #5)
-  - [ ] 3.1: Import from `langchain_vastdb`, env setup
-  - [ ] 3.2: Define a custom subclass (e.g., `TypedMetadataStore`) that overrides `_insert_vectors` and `_row_to_document`
-  - [ ] 3.3: Show typed metadata columns instead of JSON blob
-  - [ ] 3.4: Instantiate and demonstrate add/search with typed metadata
-  - [ ] 3.5: Add comments explaining Template Method pattern and hook role
-- [ ] Task 4: Create `examples/filtered_search.py` (AC: #4, #5)
-  - [ ] 4.1: Import from `langchain_vastdb`, env setup
-  - [ ] 4.2: Add documents with diverse metadata (e.g., different categories, sources)
-  - [ ] 4.3: Show `similarity_search(query, filter={"key": "value"})` narrowing results
-  - [ ] 4.4: Show multiple filter patterns (single key, different values)
-  - [ ] 4.5: Add comments explaining filter behavior
-- [ ] Task 5: Remove `examples/.gitkeep` (AC: #5)
-  - [ ] 5.1: Delete the `.gitkeep` placeholder now that real files exist
-- [ ] Task 6: Update `README.md` Examples section (AC: #1-#5)
-  - [ ] 6.1: Remove the "*(Coming in a future release.)*" note from the Examples section
-- [ ] Task 7: Validate all scripts (AC: #1-#5)
-  - [ ] 7.1: `uv run ruff check examples/` exits 0
-  - [ ] 7.2: `uv run pytest tests/unit_tests/` — all existing tests still pass (no regressions)
+- [x] Task 1: Create `examples/basic_usage.py` (AC: #1, #5)
+  - [x] 1.1: Import from `langchain_vastdb` and standard libs
+  - [x] 1.2: Read connection credentials from env vars (`VASTDB_ENDPOINT`, `VASTDB_ACCESS_KEY`, `VASTDB_SECRET_KEY`)
+  - [x] 1.3: Instantiate `VastDBVectorStore` using `from_connection_params()`
+  - [x] 1.4: Add texts with metadata using `add_texts()`
+  - [x] 1.5: Perform `similarity_search()` and print results
+  - [x] 1.6: Retrieve documents by ID using `get_by_ids()` and print
+  - [x] 1.7: Add step-by-step comments explaining each operation
+- [x] Task 2: Create `examples/rag_pipeline.py` (AC: #2, #5)
+  - [x] 2.1: Import from `langchain_vastdb`, `langchain_core`, env setup
+  - [x] 2.2: Instantiate `VastDBVectorStore` using `from_connection_params()`
+  - [x] 2.3: Add sample documents
+  - [x] 2.4: Create retriever via `as_retriever()`
+  - [x] 2.5: Build LCEL RAG chain (prompt | llm | output_parser) with retriever
+  - [x] 2.6: Invoke the chain with a sample question and print result
+  - [x] 2.7: Add comments explaining each LCEL step
+- [x] Task 3: Create `examples/subclassing.py` (AC: #3, #5)
+  - [x] 3.1: Import from `langchain_vastdb`, env setup
+  - [x] 3.2: Define a custom subclass (e.g., `TypedMetadataStore`) that overrides `_insert_vectors` and `_row_to_document`
+  - [x] 3.3: Show typed metadata columns instead of JSON blob
+  - [x] 3.4: Instantiate and demonstrate add/search with typed metadata
+  - [x] 3.5: Add comments explaining Template Method pattern and hook role
+- [x] Task 4: Create `examples/filtered_search.py` (AC: #4, #5)
+  - [x] 4.1: Import from `langchain_vastdb`, env setup
+  - [x] 4.2: Add documents with diverse metadata (e.g., different categories, sources)
+  - [x] 4.3: Show `similarity_search(query, filter={"key": "value"})` narrowing results
+  - [x] 4.4: Show multiple filter patterns (single key, different values)
+  - [x] 4.5: Add comments explaining filter behavior
+- [x] Task 5: Remove `examples/.gitkeep` (AC: #5)
+  - [x] 5.1: Delete the `.gitkeep` placeholder now that real files exist
+- [x] Task 6: Update `README.md` Examples section (AC: #1-#5)
+  - [x] 6.1: Remove the "*(Coming in a future release.)*" note from the Examples section
+- [x] Task 7: Validate all scripts (AC: #1-#5)
+  - [x] 7.1: `uv run ruff check examples/` exits 0
+  - [x] 7.2: `uv run pytest tests/unit_tests/` — all existing tests still pass (no regressions)
 
 ## Dev Notes
 
@@ -193,8 +193,26 @@ Since this example cannot run without an actual LLM, the script should show the 
 
 ### Agent Model Used
 
+Claude Opus 4 (claude-opus-4.6)
+
 ### Debug Log References
 
 ### Completion Notes List
 
+- All 4 example scripts created: basic_usage.py, rag_pipeline.py, subclassing.py, filtered_search.py
+- Each script is self-contained with env var credential handling and FakeEmbeddings placeholder
+- Uses from_connection_params() factory consistently across all examples
+- rag_pipeline.py shows chain construction with commented-out LLM section (no LLM provider in deps)
+- subclassing.py demonstrates TypedMetadataStore overriding _insert_vectors and _row_to_document
+- filtered_search.py shows 3 filter patterns (category=ml, category=database, level=beginner)
+- Removed .gitkeep placeholder, removed "Coming in a future release" from README
+- ruff check passes with zero warnings, all 47 unit tests pass (no regressions)
+
 ### File List
+
+- examples/basic_usage.py (created)
+- examples/rag_pipeline.py (created)
+- examples/subclassing.py (created)
+- examples/filtered_search.py (created)
+- examples/.gitkeep (deleted)
+- README.md (modified — removed "Coming in a future release" note)
