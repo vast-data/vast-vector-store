@@ -517,7 +517,7 @@ So that I can copy and adapt working code for my use case.
 
 **Given** all example scripts
 **When** they are reviewed
-**Then** each script is self-contained (no shared fixtures), imports from `langchain_vastdb` as a user would, includes comments explaining each step, and uses environment variables for connection credentials (never hardcoded)
+**Then** each script is self-contained (no shared fixtures), imports from `langchain_vastdb` as a user would, includes comments explaining each step, and uses the project's double-underscore environment variables for connection credentials (`VASTDB__ENDPOINT`, `VASTDB__ACCESS_KEY`, `VASTDB__SECRET_KEY`, `VASTDB__BUCKET` — never hardcoded)
 
 ### Story 4.3: Migration Guide & PyPI Publication
 

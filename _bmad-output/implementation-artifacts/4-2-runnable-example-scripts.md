@@ -67,12 +67,12 @@ Every script must use environment variables — never hardcoded credentials. Use
 ```python
 import os
 
-ENDPOINT = os.environ["VASTDB_ENDPOINT"]
-ACCESS_KEY = os.environ["VASTDB_ACCESS_KEY"]
-SECRET_KEY = os.environ["VASTDB_SECRET_KEY"]
+ENDPOINT = os.environ["VASTDB__ENDPOINT"]
+ACCESS_KEY = os.environ["VASTDB__ACCESS_KEY"]
+SECRET_KEY = os.environ["VASTDB__SECRET_KEY"]
 ```
 
-These are the same env var names used by the integration test suite (`tests/integration_tests/`). The bucket, schema, and table_name can be hardcoded as example constants (e.g., `"example-bucket"`, `"example-schema"`, `"example-table"`) — they are not credentials.
+These use the **double-underscore** convention (`VASTDB__*`) shared with the integration test suite and the `vast-pipelines` project. The bucket, schema, and table_name can be hardcoded as example constants or read from `VASTDB__BUCKET`.
 
 ### Embedding Model Placeholder
 
