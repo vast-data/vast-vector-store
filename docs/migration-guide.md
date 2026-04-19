@@ -191,6 +191,7 @@ class MyStore(VectorStore):
             for row in result
         ]
 
+    @classmethod
     def from_texts(cls, texts, embedding, metadatas=None, **kwargs):
         store = cls(embedding=embedding, **kwargs)
         store.add_texts(texts, metadatas=metadatas)
