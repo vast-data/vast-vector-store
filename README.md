@@ -381,6 +381,12 @@ See the [`examples/`](examples/) directory for runnable scripts:
 - `subclassing.py` -- custom hook overrides for typed metadata
 - `filtered_search.py` -- metadata filtering patterns
 
+## Migration Guide
+
+Migrating an existing `VectorStore` subclass to `VastDBVectorStore`? See the
+[Migration Guide](docs/migration-guide.md) for step-by-step instructions,
+a hook mapping table, and a before/after code comparison.
+
 ## Development
 
 Clone the repository and install dependencies with [uv](https://docs.astral.sh/uv/):
