@@ -360,11 +360,14 @@ class VastDBVectorStore(VectorStore):
             # Document.id is None for some documents but not others).
             ids = [id_ if id_ is not None else str(uuid.uuid4()) for id_ in ids]
         if ids_provided:
-            empties = [i for i, id_ in enumerate(ids) if isinstance(id_, str) and not id_]
+            empties = [
+                i for i, id_ in enumerate(ids)
+                if isinstance(id_, str) and not id_.strip()
+            ]
             if empties:
                 raise ValueError(
                     f"Empty-string IDs at positions {empties}; "
-                    "IDs must be non-empty strings"
+                    "IDs must be non-empty, non-whitespace strings"
                 )
             dupes = [id_ for id_, cnt in Counter(ids).items() if cnt > 1]
             if dupes:
@@ -666,15 +669,14 @@ class VastDBVectorStore(VectorStore):
 
     def _adbc_available(self) -> bool:
         """Return True when all four ADBC parameters are configured and non-blank."""
-        return bool(
-            self._adbc_driver_path
-            and self._adbc_driver_path.strip()
-            and self._adbc_endpoint
-            and self._adbc_endpoint.strip()
-            and self._access_key
-            and self._access_key.strip()
-            and self._secret_key
-            and self._secret_key.strip()
+        def _nonblank(val: object) -> bool:
+            return isinstance(val, str) and bool(val.strip())
+
+        return (
+            _nonblank(self._adbc_driver_path)
+            and _nonblank(self._adbc_endpoint)
+            and _nonblank(self._access_key)
+            and _nonblank(self._secret_key)
         )
 
     def _vector_search(
@@ -753,6 +755,11 @@ class VastDBVectorStore(VectorStore):
 
             try:
                 return self._do_vector_search_adbc(tx, query_vector, k, filter_dict)
+            except (TypeError, ValueError):
+                # AC3 input-validation errors (bad filter type, disallowed
+                # column, etc.) are caller bugs and must propagate, not be
+                # masked by the in-memory fallback.
+                raise
             except adbc_exc_types as exc:
                 _logger.warning(
                     "ADBC vector search failed (%s: %s); falling back to in-memory L2Sq scan.",
@@ -827,6 +834,11 @@ class VastDBVectorStore(VectorStore):
                     escaped = val.replace("'", "''")
                     quoted = f"'{escaped}'"
                 elif isinstance(val, (int, float)):
+                    if isinstance(val, float) and not math.isfinite(val):
+                        raise TypeError(
+                            f"filter value for {col!r} is non-finite ({val!r}); "
+                            "NaN and infinity are not valid SQL literals"
+                        )
                     quoted = str(val)
                 else:
                     raise TypeError(
@@ -969,6 +981,6 @@ class VastDBVectorStore(VectorStore):
         """
         page_content = row.get(self._text_column) or ""
         metadata_raw = row.get(self._metadata_column)
-        metadata = json.loads(metadata_raw) if metadata_raw is not None else {}
+        metadata = json.loads(metadata_raw) if metadata_raw else {}
         doc_id = row.get(self._id_column)
         return Document(page_content=page_content, metadata=metadata, id=doc_id)

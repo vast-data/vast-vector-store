@@ -1,5 +1,6 @@
 """Unit tests for VastDBVectorStore using mocked VastDB SDK calls."""
 
+import logging
 import uuid
 from unittest.mock import MagicMock, patch
 
@@ -770,4 +771,162 @@ def test_adbc_filter_rejects_unsupported_type(adbc_vectorstore, mock_transaction
             k=4,
             filter_dict={"id": [1, 2, 3]},
         )
+
+
+def test_adbc_filter_rejects_non_finite_float(adbc_vectorstore, mock_transaction):
+    """Review-P4: NaN / Inf must not be spliced into SQL literals."""
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(TypeError, match="non-finite"):
+            adbc_vectorstore._do_vector_search_adbc(
+                mock_transaction,
+                [0.1, 0.2, 0.3],
+                k=4,
+                filter_dict={"id": bad},
+            )
+
+
+# --- AC3: quoted column identifiers in ADBC SQL ---
+
+
+def test_adbc_column_identifiers_are_quoted_in_sql(
+    mock_session, fake_embedding, mock_transaction
+):
+    """AC3: id/text/metadata/vector columns must be `"`-quoted in SELECT to
+    survive SQL keyword collisions and odd characters."""
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+        id_column="select",       # SQL reserved word
+        text_column="from",       # SQL reserved word
+        metadata_column="where",  # SQL reserved word
+        vector_column="order",    # SQL reserved word
+        adbc_driver_path="/path/to/driver.so",
+        adbc_endpoint="localhost:8080",
+        access_key="ak",
+        secret_key="sk",
+    )
+    store._table_metadata = MagicMock()
+    mock_transaction.table_from_metadata.return_value = MagicMock()
+
+    mock_dbapi = MagicMock()
+    cm = mock_dbapi.connect.return_value.__enter__.return_value
+    mock_cursor = cm.cursor.return_value.__enter__.return_value
+    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
+        "select": [],
+        "distance": [],
+    }
+
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
+        store._do_vector_search_adbc(
+            mock_transaction, [0.1, 0.2, 0.3], k=4, filter_dict={"select": "x"},
+        )
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert '"select"' in executed_sql
+    assert '"order"' in executed_sql  # vector column in distance expression
+    # Bare keyword (without quotes) must not appear as an identifier — check
+    # there are no unquoted occurrences in SELECT/WHERE positions.
+    assert " select " not in f" {executed_sql} ".replace('"select"', "")
+
+
+# --- AC4: warning log emission ---
+
+
+def test_fallback_warns_on_dimension_mismatch(vectorstore, mock_transaction, caplog):
+    """AC4: in-memory fallback emits a WARNING with the count of skipped rows."""
+    mock_table = mock_transaction.table_from_metadata.return_value
+    reader = MagicMock()
+    reader.read_all.return_value.to_pylist.return_value = [
+        {"id": "a", "vector": [0.1, 0.2, 0.3]},
+        {"id": "b", "vector": [0.1, 0.2]},   # wrong dim
+        {"id": "c", "vector": None},          # missing
+    ]
+    mock_table.select.return_value = reader
+
+    with caplog.at_level(logging.WARNING, logger="langchain_vastdb.vectorstores"):
+        vectorstore._do_vector_search_fallback(
+            mock_transaction, [0.0, 0.0, 0.0], k=4, columns=["id"], predicate=None,
+        )
+
+    assert any(
+        "skipped 2/3 rows" in rec.message and "dim=3" in rec.message
+        for rec in caplog.records
+    ), caplog.text
+
+
+def test_adbc_step1_warns_on_duplicate_ids(adbc_vectorstore, mock_transaction, caplog):
+    """AC4: ADBC step-1 result with duplicate IDs emits a WARNING."""
+    mock_dbapi = MagicMock()
+    cm = mock_dbapi.connect.return_value.__enter__.return_value
+    mock_cursor = cm.cursor.return_value.__enter__.return_value
+    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
+        "id": ["x", "x", "y"],
+        "distance": [0.1, 0.2, 0.3],
+    }
+    # Step-2 returns matching rows; we only care about the warning here.
+    with patch.object(adbc_vectorstore, "_get_by_ids", return_value=[
+        {"id": "x", "text": "t", "metadata": "{}", "vector": [0.0, 0.0, 0.0]},
+        {"id": "y", "text": "t", "metadata": "{}", "vector": [0.0, 0.0, 0.0]},
+    ]), patch(
+        "langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi
+    ), caplog.at_level(logging.WARNING, logger="langchain_vastdb.vectorstores"):
+        adbc_vectorstore._do_vector_search_adbc(
+            mock_transaction, [0.1, 0.2, 0.3], k=3, filter_dict=None,
+        )
+
+    assert any("duplicate IDs collapsed" in rec.message for rec in caplog.records), caplog.text
+
+
+def test_vector_search_warns_and_falls_back_on_step2_sdk_failure(
+    adbc_vectorstore, mock_transaction, caplog
+):
+    """AC4 / DF-a: a non-ADBC exception from step-2 (`_get_by_ids`) triggers a
+    WARNING and the in-memory fallback path."""
+    mock_dbapi = MagicMock()
+    cm = mock_dbapi.connect.return_value.__enter__.return_value
+    mock_cursor = cm.cursor.return_value.__enter__.return_value
+    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
+        "id": ["a"],
+        "distance": [0.1],
+    }
+    fallback_sentinel = [({"id": "fallback", "text": "x", "metadata": "{}"}, 0.0)]
+
+    with patch(
+        "langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi
+    ), patch.object(
+        adbc_vectorstore, "_get_by_ids", side_effect=RuntimeError("boom")
+    ), patch.object(
+        adbc_vectorstore, "_do_vector_search_fallback", return_value=fallback_sentinel
+    ) as mock_fallback, caplog.at_level(
+        logging.WARNING, logger="langchain_vastdb.vectorstores"
+    ):
+        result = adbc_vectorstore._vector_search(
+            [0.1, 0.2, 0.3], k=4, predicate=None, filter_dict=None,
+        )
+
+    assert result == fallback_sentinel
+    mock_fallback.assert_called_once()
+    assert any(
+        "step-2 SDK call failed" in rec.message and "RuntimeError" in rec.message
+        for rec in caplog.records
+    ), caplog.text
+
+
+def test_vector_search_does_not_swallow_filter_validation_errors(
+    adbc_vectorstore, mock_transaction
+):
+    """Review-P1: AC3 TypeError/ValueError from filter validation must propagate
+    rather than triggering the in-memory fallback."""
+    with patch.object(
+        adbc_vectorstore, "_do_vector_search_fallback"
+    ) as mock_fallback:
+        with pytest.raises(TypeError, match="unsupported type"):
+            adbc_vectorstore._vector_search(
+                [0.1, 0.2, 0.3], k=4, predicate=None,
+                filter_dict={"id": [1, 2, 3]},
+            )
+    mock_fallback.assert_not_called()
 
