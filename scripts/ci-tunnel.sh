@@ -25,7 +25,7 @@ sshpass -p "$VASTDB__ENDPOINT_PASSWORD" ssh \
 # Wait for tunnel to be ready before returning (DF-6).
 MAX_WAIT=30
 for i in $(seq 1 "$MAX_WAIT"); do
-  if nc -z 127.0.0.1 "${LOCAL_PORT}" 2>/dev/null; then
+  if (exec 3<>/dev/tcp/127.0.0.1/"${LOCAL_PORT}") 2>/dev/null; then
     echo "Tunnel up: REST=https://localhost:${LOCAL_PORT}"
     exit 0
   fi
