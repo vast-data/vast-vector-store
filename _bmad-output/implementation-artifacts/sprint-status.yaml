@@ -70,5 +70,5 @@ development_status:
   4-1-readme-with-quickstart-configuration-and-subclassing-guide: done
   4-2-runnable-example-scripts: done
   4-2a-pre-publication-hardening: done
-  4-3-migration-guide-and-pypi-publication: ready-for-dev
+  4-3-migration-guide-and-pypi-publication: review
   epic-4-retrospective: optional

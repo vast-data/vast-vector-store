@@ -1,6 +1,6 @@
 # Story 4.3: Migration Guide & PyPI Publication
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -42,20 +42,20 @@ so that I can migrate my existing store to inherit from VastDBVectorStore and in
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Create migration guide document (AC: 1, 2)
-  - [ ] 1.1 Create `docs/migration-guide.md` with step-by-step migration instructions
-  - [ ] 1.2 Add hook method mapping table (LangChain interface method -> VastDBVectorStore hook)
-  - [ ] 1.3 Write before/after code comparison with LOC reduction
-  - [ ] 1.4 Include validation checklist for post-migration testing
-- [ ] Task 2: Add migration guide link to README (AC: 5)
-  - [ ] 2.1 Add a "Migration Guide" section or link in README.md near the Subclassing Guide or Examples section
-- [ ] Task 3: Verify build artifacts (AC: 3)
-  - [ ] 3.1 Run `uv build` and confirm wheel + sdist are produced
-  - [ ] 3.2 Inspect wheel metadata: name, version, license, dependencies, Python requires
-  - [ ] 3.3 Inspect sdist contents: ensure no internal files (_bmad/, .claude/, etc.) leak
-- [ ] Task 4: Verify package installability (AC: 4)
-  - [ ] 4.1 Create a temporary venv, install the wheel, verify `from langchain_vastdb import VastDBVectorStore` succeeds
-  - [ ] 4.2 Verify no dependency conflicts with `pip check`
+- [x] Task 1: Create migration guide document (AC: 1, 2)
+  - [x] 1.1 Create `docs/migration-guide.md` with step-by-step migration instructions
+  - [x] 1.2 Add hook method mapping table (LangChain interface method -> VastDBVectorStore hook)
+  - [x] 1.3 Write before/after code comparison with LOC reduction
+  - [x] 1.4 Include validation checklist for post-migration testing
+- [x] Task 2: Add migration guide link to README (AC: 5)
+  - [x] 2.1 Add a "Migration Guide" section or link in README.md near the Subclassing Guide or Examples section
+- [x] Task 3: Verify build artifacts (AC: 3)
+  - [x] 3.1 Run `uv build` and confirm wheel + sdist are produced
+  - [x] 3.2 Inspect wheel metadata: name, version, license, dependencies, Python requires
+  - [x] 3.3 Inspect sdist contents: ensure no internal files (_bmad/, .claude/, etc.) leak
+- [x] Task 4: Verify package installability (AC: 4)
+  - [x] 4.1 Create a temporary venv, install the wheel, verify `from langchain_vastdb import VastDBVectorStore` succeeds
+  - [x] 4.2 Verify no dependency conflicts with `pip check`
 
 ## Dev Notes
 
@@ -120,9 +120,21 @@ From story 4-1 review: "AC#4 requires a link to the migration guide in the READM
 
 ### Agent Model Used
 
+Claude Opus 4
+
 ### Debug Log References
 
 ### Completion Notes List
 
+- Created docs/migration-guide.md with 5-step migration walkthrough, hook mapping table, before/after code comparison (~200 LOC before -> ~40 LOC after), and post-migration checklist.
+- Added "Migration Guide" section to README.md between Examples and Development sections with link to docs/migration-guide.md.
+- Verified `uv build` produces valid wheel (langchain_vastdb-0.0.1-py3-none-any.whl) and sdist with correct metadata: name=langchain-vastdb, version=0.0.1, license=Apache-2.0, requires-python>=3.10, deps=[langchain-core>=1.0,<2, vastdb>=2.0.3].
+- Verified sdist excludes internal files (_bmad/, .claude/, .cursor/, etc.).
+- Verified wheel install succeeds in isolated venv, `from langchain_vastdb import VastDBVectorStore` works, `pip check` reports no dependency conflicts.
+- All 66 unit tests pass, linter clean.
+
 ### File List
+
+- docs/migration-guide.md (new)
+- README.md (modified — added Migration Guide section)
 
