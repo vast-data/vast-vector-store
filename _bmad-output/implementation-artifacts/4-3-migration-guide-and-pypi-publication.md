@@ -1,6 +1,6 @@
 # Story 4.3: Migration Guide & PyPI Publication
 
-Status: review
+Status: done
 
 ## Story
 
@@ -56,6 +56,14 @@ so that I can migrate my existing store to inherit from VastDBVectorStore and in
 - [x] Task 4: Verify package installability (AC: 4)
   - [x] 4.1 Create a temporary venv, install the wheel, verify `from langchain_vastdb import VastDBVectorStore` succeeds
   - [x] 4.2 Verify no dependency conflicts with `pip check`
+
+### Review Findings
+
+_Code review of story 4-3 — 2026-04-19 (Blind Hunter + Edge Case Hunter + Acceptance Auditor)_
+
+- [x] [Review][Patch] `from_texts` in "before" example missing `@classmethod` decorator [docs/migration-guide.md] — Added decorator to match the `cls` parameter usage.
+
+_Dismissed as noise (2): missing import statements in "before" code snippet (intentional abbreviation), LOC claim vs shown snippet length (text clearly says "~200 LOC" for a complete implementation while showing an abridged version)._
 
 ## Dev Notes
 
