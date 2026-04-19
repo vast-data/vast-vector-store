@@ -76,3 +76,12 @@
 - `test_credentials_not_stored_as_instance_attributes` test name is misleading — credentials ARE stored as `_access_key`/`_secret_key` (documented behavior). Test only checks there's no *public* attribute. **→ Story 4-2a**
 - ADBC SQL path inconsistently quotes column names — `_id_column` is unquoted in SELECT while `_vector_column` is quoted. Edge-case breakage if column name is a SQL keyword. **→ Story 4-2a (folded into DF-i)**
 - ADBC SQL filter value interpolation uses bare `str(val)` for non-string/non-bool types. A type whitelist (str, int, float, bool) would close the injection edge case. **→ Story 4-2a (folded into DF-9)**
+
+## Deferred from: code review of 4-2a-pre-publication-hardening (2026-04-19)
+
+- `similarity_search_by_vector` raises `ValueError` on `numpy.ndarray` embedding due to `if not embedding` truth-value check at `vectorstores.py:516`. Pre-existing.
+- Non-string IDs (e.g. ints `123`, `0`) bypass the empty-ID check at `vectorstores.py:363` because `isinstance(id_, str)` short-circuits. AC2 was narrowly scoped to empty strings.
+- ADBC step-1 result-shape assumption: `result.get(self._id_column, [])` at `vectorstores.py:870` returns `[]` (and the caller returns no results with no warning) if a driver lower/upper-cases the projected column key.
+- `dict(zip(ids, distances))` at `vectorstores.py:883` truncates silently if step-1 arrays have mismatched lengths.
+- Metadata JSON shape not validated as `dict` at `vectorstores.py:972`. `json.loads("[1,2,3]")` would yield a list metadata, violating LangChain's `metadata: dict` contract.
+- CI tunnel readiness probe (`scripts/ci-tunnel.sh:23-31`) uses `/dev/tcp` which succeeds even if `ssh -f -N` died after binding the local port. AC6 satisfied as written; deeper liveness check (PID capture / `pgrep`) deferred.
