@@ -36,7 +36,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-09
-last_updated: 2026-04-17  # 4-2a story created
+last_updated: 2026-04-19  # 4-3 story created
 project: vast-vector-store
 project_key: NOKEY
 tracking_system: file-system
@@ -70,5 +70,5 @@ development_status:
   4-1-readme-with-quickstart-configuration-and-subclassing-guide: done
   4-2-runnable-example-scripts: done
   4-2a-pre-publication-hardening: done
-  4-3-migration-guide-and-pypi-publication: backlog
+  4-3-migration-guide-and-pypi-publication: ready-for-dev
   epic-4-retrospective: optional
