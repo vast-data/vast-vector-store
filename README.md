@@ -263,6 +263,7 @@ full LangChain interface.
 | Hook | Purpose | Returns |
 |------|---------|---------|
 | `_insert_vectors` | Customize record insertion | `list[str]` (IDs) |
+| `_metadata_columns` | Customize column layout for metadata | `dict[str, list]` |
 | `_vector_search` | Customize similarity search | `list[tuple[dict, float]]` |
 | `_delete_by_ids` | Customize document deletion | `bool` |
 | `_get_by_ids` | Customize document retrieval | `list[dict]` |
@@ -327,50 +328,25 @@ with self._session.transaction() as tx:
 ### Example: typed metadata columns
 
 The base class stores metadata as a single JSON string column. If you need typed
-columns for performance-critical filtering, override `_insert_vectors` and
-`_row_to_document`:
+columns for performance-critical filtering, set `_typed_metadata_columns`:
 
 ```python
-import pyarrow as pa
-from langchain_core.documents import Document
 from langchain_vastdb import VastDBVectorStore
 
 
 class TypedMetadataStore(VastDBVectorStore):
     """Store with typed 'category' and 'priority' metadata columns."""
 
-    def _insert_vectors(self, texts, embeddings, metadatas, ids, *, tx=None):
-        vector_dim = len(embeddings[0])
-        vector_type = pa.list_(pa.field("item", pa.float32(), nullable=False), vector_dim)
-        batch = pa.RecordBatch.from_pydict({
-            self._id_column: ids,
-            self._text_column: texts,
-            self._vector_column: pa.array(embeddings, type=vector_type),
-            "category": [m.get("category", "") for m in metadatas],
-            "priority": [m.get("priority", 0) for m in metadatas],
-        })
-        if tx is not None:
-            table = self._get_table(tx)
-            table.insert(batch)
-            return ids
-        with self._session.transaction() as new_tx:
-            table = self._get_table(new_tx)
-            table.insert(batch)
-            return ids
-
-    def _row_to_document(self, row, score=None):
-        return Document(
-            page_content=row.get(self._text_column, ""),
-            metadata={
-                "id": row.get(self._id_column),
-                "category": row.get("category", ""),
-                "priority": row.get("priority", 0),
-            },
-        )
+    _typed_metadata_columns = ("category", "priority")
 ```
 
-This gives you typed, indexable columns while the public LangChain interface
-(`add_texts`, `similarity_search`, etc.) stays unchanged.
+This automatically extracts `category` and `priority` into separate typed columns
+on insert, preserves any extra metadata in the JSON column, and merges everything
+back together on read. The public LangChain interface (`add_texts`,
+`similarity_search`, etc.) stays unchanged.
+
+For custom defaults or type coercion, override `_metadata_columns()` directly
+(see the [Migration Guide](docs/migration-guide.md) for details).
 
 ## Examples
 
@@ -378,7 +354,7 @@ See the [`examples/`](examples/) directory for runnable scripts:
 
 - `basic_usage.py` -- add texts, search, retrieve
 - `rag_pipeline.py` -- `as_retriever()` + LCEL RAG chain
-- `subclassing.py` -- custom hook overrides for typed metadata
+- `subclassing.py` -- declarative typed metadata columns
 - `filtered_search.py` -- metadata filtering patterns
 
 ## Migration Guide

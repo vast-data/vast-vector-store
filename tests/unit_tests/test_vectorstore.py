@@ -1,5 +1,6 @@
 """Unit tests for VastDBVectorStore using mocked VastDB SDK calls."""
 
+import json
 import logging
 import uuid
 from unittest.mock import MagicMock, patch
@@ -365,13 +366,9 @@ def test_add_texts_dispatches_to_overridden_insert_vectors(mock_session, fake_em
 
 
 class TypedColumnStore(VastDBVectorStore):
-    """Test subclass that overrides _metadata_columns for typed columns."""
+    """Test subclass using the declarative _typed_metadata_columns attribute."""
 
-    def _metadata_columns(self, metadatas):
-        return {
-            "category": [m.get("category", "") for m in metadatas],
-            "source": [m.get("source", "") for m in metadatas],
-        }
+    _typed_metadata_columns = ("category", "source")
 
 
 def test_metadata_columns_default_serializes_json(vectorstore):
@@ -380,8 +377,40 @@ def test_metadata_columns_default_serializes_json(vectorstore):
     assert result["metadata"] == ['{"k": "v"}', '{"k2": "v2"}']
 
 
-def test_metadata_columns_override_used_by_insert_vectors(
-    mock_session, fake_embedding, mock_transaction
+def test_typed_metadata_columns_pops_fields_and_dumps_remainder(
+    mock_session, fake_embedding,
+):
+    store = TypedColumnStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+    )
+    result = store._metadata_columns([
+        {"category": "db", "source": "docs", "extra": "val"},
+    ])
+    assert result["category"] == ["db"]
+    assert result["source"] == ["docs"]
+    assert json.loads(result["metadata"][0]) == {"extra": "val"}
+
+
+def test_typed_metadata_columns_select_columns_auto_derived(
+    mock_session, fake_embedding,
+):
+    store = TypedColumnStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+    )
+    cols = store._select_columns()
+    assert cols == ["id", "text", "category", "source", "metadata"]
+
+
+def test_typed_metadata_columns_used_by_insert_vectors(
+    mock_session, fake_embedding, mock_transaction,
 ):
     store = TypedColumnStore(
         embedding=fake_embedding,
@@ -397,14 +426,57 @@ def test_metadata_columns_override_used_by_insert_vectors(
 
     store._insert_vectors(
         ["hello"], [[0.1, 0.2, 0.3]],
-        [{"category": "db", "source": "docs"}],
+        [{"category": "db", "source": "docs", "extra": "val"}],
         ["id-1"],
         tx=mock_transaction,
     )
     batch = mock_table.insert.call_args[0][0]
     assert batch.column("category").to_pylist() == ["db"]
     assert batch.column("source").to_pylist() == ["docs"]
-    assert "metadata" not in batch.schema.names
+    assert json.loads(batch.column("metadata").to_pylist()[0]) == {"extra": "val"}
+
+
+def test_typed_metadata_columns_row_to_document_merges(
+    mock_session, fake_embedding,
+):
+    store = TypedColumnStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+    )
+    row = {
+        "id": "1",
+        "text": "hello",
+        "category": "db",
+        "source": "docs",
+        "metadata": json.dumps({"extra": "val"}),
+    }
+    doc = store._row_to_document(row)
+    assert doc.metadata == {"extra": "val", "category": "db", "source": "docs"}
+
+
+def test_typed_metadata_columns_empty_default_skipped_on_read(
+    mock_session, fake_embedding,
+):
+    store = TypedColumnStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+    )
+    row = {
+        "id": "1",
+        "text": "hello",
+        "category": "",
+        "source": "",
+        "metadata": json.dumps({"foo": "bar"}),
+    }
+    doc = store._row_to_document(row)
+    assert doc.metadata == {"foo": "bar"}
+    assert "category" not in doc.metadata
 
 
 class ScoreAddingVectorStore(VastDBVectorStore):

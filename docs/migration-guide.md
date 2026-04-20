@@ -42,6 +42,7 @@ only overrides the **hook methods** that customize storage behavior.
 | LangChain interface method | VastDBVectorStore hook to override | What the hook does |
 |---|---|---|
 | `add_texts()` / `add_documents()` | `_insert_vectors()` | Build and insert a PyArrow RecordBatch |
+| *(metadata layout)* | `_metadata_columns()` | Define column layout for metadata storage |
 | `similarity_search()` / `similarity_search_by_vector()` | `_vector_search()` | Execute the vector similarity query |
 | `delete()` | `_delete_by_ids()` | Delete rows by document ID |
 | `get_by_ids()` | `_get_by_ids()` | Retrieve rows by document ID |
@@ -50,6 +51,25 @@ only overrides the **hook methods** that customize storage behavior.
 Move the storage logic from your old interface methods into the matching hook.
 Each hook receives pre-processed inputs (embeddings already computed, filters
 already converted) and returns a simple result.
+
+### Typed metadata columns (declarative shortcut)
+
+If your subclass stores certain metadata fields as separate typed columns
+(for efficient columnar filtering), set `_typed_metadata_columns` instead of
+overriding multiple hooks:
+
+```python
+class MyStore(VastDBVectorStore):
+    _typed_metadata_columns = ("category", "source")
+```
+
+This automatically:
+- Extracts `category` and `source` into typed columns on insert
+- Preserves any extra metadata fields in the JSON metadata column
+- Merges typed columns back into metadata on read
+- Derives `_select_columns` to include both typed and JSON columns
+
+For custom defaults or type coercion, override `_metadata_columns()` directly.
 
 ### Hook signatures
 
@@ -208,49 +228,19 @@ class MyStore(VectorStore):
     # ... more boilerplate for search_with_score, by_vector, etc.
 ```
 
-### After: VastDBVectorStore subclass (~40 LOC)
+### After: VastDBVectorStore subclass (~5 LOC)
 
 ```python
 from langchain_vastdb import VastDBVectorStore
-from langchain_core.documents import Document
-import pyarrow as pa
 
 class MyStore(VastDBVectorStore):
-    CATEGORY_COLUMN = "category"
-
-    def _select_columns(self) -> list[str]:
-        return [self._id_column, self._text_column, self.CATEGORY_COLUMN]
-
-    def _insert_vectors(self, texts, embeddings, metadatas, ids, *, tx=None):
-        if not embeddings:
-            return ids
-        vector_dim = len(embeddings[0])
-        vector_type = pa.list_(
-            pa.field("item", pa.float32(), nullable=False), vector_dim
-        )
-        batch = pa.RecordBatch.from_pydict({
-            self._id_column: ids,
-            self._text_column: texts,
-            self._vector_column: pa.array(embeddings, type=vector_type),
-            self.CATEGORY_COLUMN: [m.get("category", "") for m in metadatas],
-        })
-        if tx is not None:
-            self._get_table(tx).insert(batch)
-            return ids
-        with self._session.transaction() as new_tx:
-            self._get_table(new_tx).insert(batch)
-            return ids
-
-    def _row_to_document(self, row, score=None):
-        return Document(
-            page_content=row.get(self._text_column, ""),
-            metadata={"category": row.get(self.CATEGORY_COLUMN, "")},
-            id=row.get(self._id_column),
-        )
+    _typed_metadata_columns = ("category",)
 ```
 
-**Result:** ~80% less code. No manual embedding, no transaction boilerplate,
+**Result:** ~95% less code. No manual embedding, no transaction boilerplate,
 no filter conversion, no `from_texts`/`delete`/`get_by_ids` reimplementation.
+The `category` field is stored as a typed column for efficient filtering;
+any extra metadata survives round-trip via the JSON column.
 
 ## Post-migration checklist
 

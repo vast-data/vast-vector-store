@@ -1,8 +1,8 @@
 """Subclassing VastDBVectorStore with typed metadata columns.
 
-Demonstrates the Template Method pattern by overriding
-``_metadata_columns`` and ``_row_to_document`` to replace the
-default JSON metadata column with typed columns (category, source).
+Demonstrates the declarative ``_typed_metadata_columns`` attribute
+that automatically extracts named fields into separate VastDB columns
+while preserving any extra metadata in the JSON column.
 
 Prerequisites:
     - A running VAST cluster with vector search support
@@ -16,12 +16,10 @@ from __future__ import annotations
 
 import os
 import uuid
-from typing import Any
 
 import pyarrow as pa
 import vastdb
 from dotenv import load_dotenv
-from langchain_core.documents import Document
 from langchain_core.embeddings import FakeEmbeddings
 
 from langchain_vastdb import VastDBVectorStore
@@ -44,61 +42,28 @@ BUCKET = os.environ.get("VASTDB__BUCKET", "example-bucket")
 # 2. Define a subclass that uses typed metadata columns.
 #
 #    Instead of storing metadata as a single JSON string (the default),
-#    this subclass stores "category" and "source" as separate typed columns.
-#    This enables efficient columnar filtering in VastDB.
+#    this subclass promotes "category" and "source" to separate typed
+#    columns.  This enables efficient columnar filtering in VastDB.
 #
-#    Only three hooks need overriding:
-#      - _metadata_columns: define typed column layout (replaces JSON)
-#      - _row_to_document: reconstruct Document metadata from typed columns
-#      - _select_columns: tell the base class which columns to SELECT
+#    Only one declaration is needed:
+#      - _typed_metadata_columns: names of fields to promote
+#
+#    The base class automatically derives _select_columns,
+#    _metadata_columns, and _row_to_document from this declaration.
+#    Extra metadata fields (not listed) are preserved in the JSON column.
 # ---------------------------------------------------------------------------
 
 
 class TypedMetadataStore(VastDBVectorStore):
-    """A VastDBVectorStore that stores metadata in typed columns.
+    """A VastDBVectorStore that promotes metadata fields to typed columns."""
 
-    Only two hooks need overriding:
-      - _metadata_columns: define the column layout for inserts
-      - _row_to_document: reconstruct Document metadata from typed columns
-      - _select_columns: tell the base class which columns to SELECT
-    """
-
-    CATEGORY_COLUMN = "category"
-    SOURCE_COLUMN = "source"
-
-    def _select_columns(self) -> list[str]:
-        return [
-            self._id_column,
-            self._text_column,
-            self.CATEGORY_COLUMN,
-            self.SOURCE_COLUMN,
-        ]
-
-    def _metadata_columns(self, metadatas: list[dict]) -> dict[str, list]:
-        """Store category and source as typed columns instead of JSON."""
-        return {
-            self.CATEGORY_COLUMN: [m.get("category", "") for m in metadatas],
-            self.SOURCE_COLUMN: [m.get("source", "") for m in metadatas],
-        }
-
-    def _row_to_document(
-        self,
-        row: dict,
-        score: float | None = None,
-    ) -> Document:
-        page_content = row.get(self._text_column, "")
-        metadata: dict[str, Any] = {
-            "category": row.get(self.CATEGORY_COLUMN, ""),
-            "source": row.get(self.SOURCE_COLUMN, ""),
-        }
-        doc_id = row.get(self._id_column)
-        return Document(page_content=page_content, metadata=metadata, id=doc_id)
+    _typed_metadata_columns = ("category", "source")
 
 
 # ---------------------------------------------------------------------------
 # 3. Create an isolated schema and table for this example run.
-#    The table includes typed "category" and "source" columns instead of
-#    the default "metadata" JSON column.
+#    The table includes typed "category" and "source" columns alongside
+#    the default "metadata" JSON column for extra fields.
 # ---------------------------------------------------------------------------
 VECTOR_DIM = 1536
 embedding = FakeEmbeddings(size=VECTOR_DIM)
@@ -119,6 +84,7 @@ TABLE_SCHEMA = pa.schema(
         ),
         pa.field("category", pa.string()),
         pa.field("source", pa.string()),
+        pa.field("metadata", pa.string()),
     ]
 )
 
@@ -133,6 +99,8 @@ with session.transaction() as tx:
 try:
     # -------------------------------------------------------------------
     # 4. Create a TypedMetadataStore instance and add documents.
+    #    Note the third document has an "extra" field not declared in
+    #    _typed_metadata_columns — it is preserved in the JSON column.
     # -------------------------------------------------------------------
     store = TypedMetadataStore.from_connection_params(
         embedding=embedding,
@@ -154,21 +122,20 @@ try:
         metadatas=[
             {"category": "database", "source": "vastdb-docs"},
             {"category": "framework", "source": "langchain-docs"},
-            {"category": "search", "source": "ml-handbook"},
+            {"category": "search", "source": "ml-handbook", "extra": "preserved"},
         ],
     )
     print(f"Added {len(ids)} documents with typed metadata columns.")
 
     # -------------------------------------------------------------------
-    # 5. Search and observe that metadata comes from typed columns.
+    # 5. Search and observe that metadata comes from typed columns +
+    #    any extra fields from the JSON column.
     # -------------------------------------------------------------------
-    results = store.similarity_search("database analytics", k=2)
+    results = store.similarity_search("database analytics", k=3)
     print(f"\nSearch results ({len(results)} docs):")
     for doc in results:
         print(f"  - {doc.page_content!r}")
-        print(
-            f"    category={doc.metadata['category']}, source={doc.metadata['source']}"
-        )
+        print(f"    metadata={doc.metadata}")
 
 finally:
     # -------------------------------------------------------------------
