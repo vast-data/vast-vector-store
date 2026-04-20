@@ -4,8 +4,8 @@ Demonstrates adding documents with varied metadata and using the
 ``filter`` parameter to narrow similarity search results.
 
 The ``filter`` parameter in ``similarity_search()`` works on **table
-columns**, not JSON metadata fields.  This example therefore stores
-``category`` and ``level`` as typed columns (via a small subclass)
+columns**, not JSON metadata fields.  This example therefore promotes
+``category`` and ``level`` to typed columns via ``_typed_metadata_columns``
 so that ibis predicates can filter on them directly.
 
 Prerequisites:
@@ -20,18 +20,13 @@ from __future__ import annotations
 
 import os
 import uuid
-from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 import vastdb
 from dotenv import load_dotenv
-from langchain_core.documents import Document
 from langchain_core.embeddings import FakeEmbeddings
 
 from langchain_vastdb import VastDBVectorStore
-
-if TYPE_CHECKING:
-    from vastdb.transaction import Transaction
 
 # ---------------------------------------------------------------------------
 # 0. Load environment variables from .env (same mechanism as conftest.py).
@@ -52,74 +47,23 @@ BUCKET = os.environ.get("VASTDB__BUCKET", "example-bucket")
 #    The ``filter`` dict in ``similarity_search()`` creates ibis equality
 #    predicates on table columns, so the fields we want to filter on must
 #    be stored as first-class columns.
+#
+#    ``_typed_metadata_columns`` handles everything: insert, select, and
+#    document reconstruction.  Extra metadata fields are preserved in the
+#    JSON column automatically.
 # ---------------------------------------------------------------------------
 
 
 class FilterableStore(VastDBVectorStore):
     """VastDBVectorStore with typed columns for filtered search."""
 
-    CATEGORY_COLUMN = "category"
-    LEVEL_COLUMN = "level"
-
-    def _select_columns(self) -> list[str]:
-        return [
-            self._id_column,
-            self._text_column,
-            self.CATEGORY_COLUMN,
-            self.LEVEL_COLUMN,
-        ]
-
-    def _insert_vectors(
-        self,
-        texts: list[str],
-        embeddings: list[list[float]],
-        metadatas: list[dict],
-        ids: list[str],
-        *,
-        tx: Transaction | None = None,
-    ) -> list[str]:
-        if not embeddings:
-            return ids
-        vector_dim = len(embeddings[0])
-        vector_type = pa.list_(
-            pa.field("item", pa.float32(), nullable=False), vector_dim
-        )
-        batch = pa.RecordBatch.from_pydict(
-            {
-                self._id_column: ids,
-                self._text_column: texts,
-                self._vector_column: pa.array(embeddings, type=vector_type),
-                self.CATEGORY_COLUMN: [m.get("category", "") for m in metadatas],
-                self.LEVEL_COLUMN: [m.get("level", "") for m in metadatas],
-            }
-        )
-        if tx is not None:
-            table = self._get_table(tx)
-            table.insert(batch)
-            return ids
-        with self._session.transaction() as new_tx:
-            table = self._get_table(new_tx)
-            table.insert(batch)
-            return ids
-
-    def _row_to_document(
-        self, row: dict, score: float | None = None
-    ) -> Document:
-        page_content = row.get(self._text_column, "")
-        metadata: dict[str, Any] = {
-            "category": row.get(self.CATEGORY_COLUMN, ""),
-            "level": row.get(self.LEVEL_COLUMN, ""),
-        }
-        return Document(
-            page_content=page_content,
-            metadata=metadata,
-            id=row.get(self._id_column),
-        )
+    _typed_metadata_columns = ("category", "level")
 
 
 # ---------------------------------------------------------------------------
 # 3. Create an isolated schema and table for this example run.
-#    The table includes typed "category" and "level" columns.
+#    The table includes typed "category" and "level" columns alongside
+#    the default "metadata" JSON column for extra fields.
 # ---------------------------------------------------------------------------
 VECTOR_DIM = 1536
 embedding = FakeEmbeddings(size=VECTOR_DIM)
@@ -140,6 +84,7 @@ TABLE_SCHEMA = pa.schema(
         ),
         pa.field("category", pa.string()),
         pa.field("level", pa.string()),
+        pa.field("metadata", pa.string()),
     ]
 )
 
@@ -168,8 +113,8 @@ try:
 
     # -------------------------------------------------------------------
     # 5. Add documents with diverse metadata.
-    #    "category" and "level" are stored as typed columns, making them
-    #    filterable via the ``filter`` parameter.
+    #    "category" and "level" are promoted to typed columns, making
+    #    them filterable via the ``filter`` parameter.
     # -------------------------------------------------------------------
     store.add_texts(
         texts=[
