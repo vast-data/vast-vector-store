@@ -85,3 +85,33 @@
 - `dict(zip(ids, distances))` at `vectorstores.py:883` truncates silently if step-1 arrays have mismatched lengths.
 - Metadata JSON shape not validated as `dict` at `vectorstores.py:972`. `json.loads("[1,2,3]")` would yield a list metadata, violating LangChain's `metadata: dict` contract.
 - CI tunnel readiness probe (`scripts/ci-tunnel.sh:23-31`) uses `/dev/tcp` which succeeds even if `ssh -f -N` died after binding the local port. AC6 satisfied as written; deeper liveness check (PID capture / `pgrep`) deferred.
+
+## Deferred from: project-wide holistic review (2026-04-19)
+
+Whole-project sweep covering code, architecture, UX, tests, and docs. Items already captured in `deferred-decisions.md` (DD-8 hardcoded l2sq, DD-9 private `_vector_index` write) are referenced, not duplicated.
+
+### Docs / packaging inconsistencies
+
+- **PWR-1.** `README.md:80-81` states: *"Credentials are passed directly to `vastdb.connect()` and are **not** stored on the instance."* This contradicts `from_connection_params` at `vectorstores.py:189-199`, which forwards `access_key`/`secret_key` into `__init__` where they are stored as `self._access_key`/`self._secret_key` (documented at `vectorstores.py:116-123`). Either fix the README to match reality, or make `from_connection_params` only retain credentials when `adbc_driver_path` is set (the only consumer). The misleading-test-name item at deferred-work line 76 is adjacent but the README-level contradiction is the user-visible half.
+- **PWR-2.** `README.md:10,21` says `langchain-core >= 0.3`, but `pyproject.toml:27` now pins `langchain-core>=1.0,<2` (resolved during Story 4-2a per deferred-work line 7). README compatibility line is stale — pip will resolve 1.x regardless, so the README misinforms pre-install readers. Single-line fix.
+
+### Correctness consistency
+
+- **PWR-3.** Filter-column validation is asymmetric between search paths. The ADBC path validates filter keys against `_select_columns()` (`vectorstores.py:817-825`), but the in-memory fallback builds an ibis predicate via `_build_predicate` (`vectorstores.py:647-668`) with **no** column-name validation. Same `filter_dict` is accepted on one path and rejected on the other depending on whether ADBC is available. Either validate up-front in `similarity_search*` before branching, or add the same allowlist check in the fallback path. Folds naturally with DF-i-style quoting audits.
+
+### Code quality / DRY
+
+- **PWR-4.** Tx-open/reuse boilerplate is copy-pasted in four hooks: `_insert_vectors` (`vectorstores.py:423-431`), `_delete_by_ids` (`vectorstores.py:577-591`), `_get_by_ids` (`vectorstores.py:637-645`), `_vector_search` (`vectorstores.py:709-713`). Each has an identical `if tx is not None: ... else: with self._session.transaction() as new_tx: ...` pattern. A small internal `@contextmanager _with_tx(tx)` would halve those methods and reduce drift risk if the tx lifecycle ever changes. Defer to next refactor pass — low risk but touches every hook.
+- **PWR-5.** k/NaN/inf validation is triplicated across `similarity_search`, `similarity_search_with_score`, `similarity_search_by_vector` (`vectorstores.py:454-461, 483-490, 515-522`). Extract `_validate_k(k)` and `_validate_query_vector(vec)` helpers. Pure mechanical cleanup.
+- **PWR-6.** Dead defensive guard at `vectorstores.py:411-412`: `_insert_vectors` starts with `if not embeddings: return ids`, but `add_texts` already early-returns on empty `texts_list` at line 345. Embeddings cannot be empty on this call path. Either delete the inner guard or make it the sole guard (remove the one in `add_texts`). Either direction, not both.
+
+### DX / API ergonomics
+
+- **PWR-7.** `filter` is a `**kwargs` key on `similarity_search`, `similarity_search_with_score`, `similarity_search_by_vector`. Discoverable only via prose docs — does not show up in IDE autocomplete or type hints. Promote to an explicit keyword: `filter: dict | None = None`. Zero behavior change; improves discovery.
+- **PWR-8.** `ssl_verify=True` default on `from_connection_params` is the right default, but every bundled example (`examples/basic_usage.py:73`, etc.) and integration fixture (`tests/integration_tests/test_vectorstore.py:89`) overrides to `False`. Signals that real clusters often use self-signed certs. README quickstart uses bare `http://` which dodges the issue. Add a one-liner callout in the quickstart or config reference so users hit this in docs, not at runtime.
+- **PWR-9.** Constructor surface is asymmetric: `from_connection_params` accepts `ssl_verify` but plain `__init__` does not (users build their own session, so they pass it there). Correct but surprising. One README sentence would prevent the DX trip.
+
+### Tests
+
+- **PWR-10.** `tests/unit_tests/test_vectorstore.py` is 932 lines in one module. Works today but split-by-concern (construction, add_texts, search, adbc, hooks, row-to-doc) would improve navigation and parallelize future additions. Not urgent.
+
