@@ -9,7 +9,7 @@ import pytest
 from langchain_core.documents import Document
 from langchain_core.embeddings import DeterministicFakeEmbedding
 
-from langchain_vastdb import VastDBVectorStore
+from langchain_vastdb import TypedColumn, VastDBVectorStore
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -368,7 +368,10 @@ def test_add_texts_dispatches_to_overridden_insert_vectors(mock_session, fake_em
 class TypedColumnStore(VastDBVectorStore):
     """Test subclass using the declarative _typed_metadata_columns attribute."""
 
-    _typed_metadata_columns = ("category", "source")
+    _typed_metadata_columns = {
+        "category": TypedColumn(),
+        "source": TypedColumn(),
+    }
 
 
 def test_metadata_columns_default_serializes_json(vectorstore):
@@ -1044,4 +1047,166 @@ def test_vector_search_does_not_swallow_filter_validation_errors(
                 filter_dict={"id": [1, 2, 3]},
             )
     mock_fallback.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# TypedColumn (dict-form) tests
+# ---------------------------------------------------------------------------
+
+
+class DictTypedColumnStore(VastDBVectorStore):
+    _typed_metadata_columns = {
+        "chunk_id": TypedColumn(),
+        "agent_id": TypedColumn(),
+        "status": TypedColumn(default="completed", backfill=False),
+        "created_at": TypedColumn(
+            default_factory=lambda: 9999,
+            pa_type=__import__("pyarrow").int64(),
+            backfill=False,
+        ),
+        "updated_at": TypedColumn(
+            default_factory=lambda: 8888,
+            pa_type=__import__("pyarrow").int64(),
+            backfill=False,
+        ),
+    }
+    _store_full_metadata_json = True
+
+
+@pytest.fixture
+def dict_typed_store(mock_session, fake_embedding, mock_transaction):
+    store = DictTypedColumnStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+    )
+    store._table_metadata = MagicMock()
+    mock_table = MagicMock()
+    mock_transaction.table_from_metadata.return_value = mock_table
+    return store
+
+
+def test_dict_typed_columns_with_custom_defaults(dict_typed_store):
+    cols = dict_typed_store._metadata_columns([{"foo": "bar"}])
+    assert cols["chunk_id"] == [""]
+    assert cols["agent_id"] == [""]
+    assert cols["status"] == ["completed"]
+    assert cols["created_at"].to_pylist() == [9999]
+    assert cols["updated_at"].to_pylist() == [8888]
+
+
+def test_dict_typed_columns_with_pa_type_coercion(dict_typed_store):
+    import pyarrow as pa
+
+    cols = dict_typed_store._metadata_columns([{"created_at": 1000, "updated_at": 2000}])
+    assert isinstance(cols["created_at"], pa.Array)
+    assert cols["created_at"].type == pa.int64()
+    assert cols["created_at"].to_pylist() == [1000]
+
+
+def test_dict_typed_columns_backfill_false_not_merged(dict_typed_store):
+    row = {
+        "id": "1",
+        "text": "hello",
+        "chunk_id": "",
+        "agent_id": "",
+        "status": "completed",
+        "created_at": 9999,
+        "updated_at": 8888,
+        "metadata": json.dumps({"foo": "bar"}),
+    }
+    doc = dict_typed_store._row_to_document(row)
+    assert doc.metadata == {"foo": "bar"}
+    assert "status" not in doc.metadata
+    assert "created_at" not in doc.metadata
+    assert "updated_at" not in doc.metadata
+
+
+def test_dict_typed_columns_backfill_true_merged(dict_typed_store):
+    row = {
+        "id": "1",
+        "text": "hello",
+        "chunk_id": "c1",
+        "agent_id": "a1",
+        "status": "completed",
+        "created_at": 9999,
+        "updated_at": 8888,
+        "metadata": json.dumps({"extra": "val"}),
+    }
+    doc = dict_typed_store._row_to_document(row)
+    assert doc.metadata["chunk_id"] == "c1"
+    assert doc.metadata["agent_id"] == "a1"
+    assert doc.metadata["extra"] == "val"
+    assert "status" not in doc.metadata
+    assert "created_at" not in doc.metadata
+
+
+def test_store_full_metadata_json_keeps_all_fields(dict_typed_store):
+    meta = {
+        "chunk_id": "c1",
+        "agent_id": "a1",
+        "status": "completed",
+        "created_at": 1000,
+        "updated_at": 2000,
+        "model_used": "llava",
+    }
+    cols = dict_typed_store._metadata_columns([meta])
+    stored = json.loads(cols["metadata"][0])
+    assert stored == meta
+
+
+def test_store_full_metadata_json_with_backfill_false(dict_typed_store):
+    meta = {"foo": "bar"}
+    cols = dict_typed_store._metadata_columns([meta])
+    stored = json.loads(cols["metadata"][0])
+    assert stored == {"foo": "bar"}
+    row = {
+        "id": "1",
+        "text": "hello",
+        "chunk_id": "",
+        "agent_id": "",
+        "status": "completed",
+        "created_at": 9999,
+        "updated_at": 8888,
+        "metadata": cols["metadata"][0],
+    }
+    doc = dict_typed_store._row_to_document(row)
+    assert doc.metadata == {"foo": "bar"}
+
+
+def test_dict_typed_columns_select_columns_auto_derived(dict_typed_store):
+    cols = dict_typed_store._select_columns()
+    assert cols == ["id", "text", "chunk_id", "agent_id", "status", "created_at", "updated_at", "metadata"]
+
+
+def test_dict_typed_columns_used_by_insert_vectors(
+    mock_session, fake_embedding, mock_transaction,
+):
+    store = DictTypedColumnStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+    )
+    store._table_metadata = MagicMock()
+    store._metadata_loaded = False
+    mock_table = MagicMock()
+    mock_transaction.table_from_metadata.return_value = mock_table
+
+    store._insert_vectors(
+        ["hello"], [[0.1, 0.2, 0.3]],
+        [{"chunk_id": "c1", "agent_id": "a1", "model_used": "test"}],
+        ["id-1"],
+        tx=mock_transaction,
+    )
+    batch = mock_table.insert.call_args[0][0]
+    assert batch.column("chunk_id").to_pylist() == ["c1"]
+    assert batch.column("agent_id").to_pylist() == ["a1"]
+    assert batch.column("status").to_pylist() == ["completed"]
+    stored = json.loads(batch.column("metadata").to_pylist()[0])
+    assert stored["chunk_id"] == "c1"
+    assert stored["model_used"] == "test"
 

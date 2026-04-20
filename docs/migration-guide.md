@@ -59,8 +59,13 @@ If your subclass stores certain metadata fields as separate typed columns
 overriding multiple hooks:
 
 ```python
+from langchain_vastdb import TypedColumn, VastDBVectorStore
+
 class MyStore(VastDBVectorStore):
-    _typed_metadata_columns = ("category", "source")
+    _typed_metadata_columns = {
+        "category": TypedColumn(),
+        "source": TypedColumn(),
+    }
 ```
 
 This automatically:
@@ -69,7 +74,7 @@ This automatically:
 - Merges typed columns back into metadata on read
 - Derives `_select_columns` to include both typed and JSON columns
 
-For custom defaults or type coercion, override `_metadata_columns()` directly.
+Use `TypedColumn` fields for custom defaults, type coercion, or backfill control.
 
 ### Hook signatures
 
@@ -231,10 +236,10 @@ class MyStore(VectorStore):
 ### After: VastDBVectorStore subclass (~5 LOC)
 
 ```python
-from langchain_vastdb import VastDBVectorStore
+from langchain_vastdb import TypedColumn, VastDBVectorStore
 
 class MyStore(VastDBVectorStore):
-    _typed_metadata_columns = ("category",)
+    _typed_metadata_columns = {"category": TypedColumn()}
 ```
 
 **Result:** ~95% less code. No manual embedding, no transaction boilerplate,

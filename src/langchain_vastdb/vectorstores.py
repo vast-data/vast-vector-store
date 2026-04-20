@@ -8,6 +8,7 @@ import math
 import types
 import uuid
 from collections import Counter
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import ibis
@@ -19,7 +20,7 @@ from langchain_core.vectorstores import VectorStore
 from vastdb.table_metadata import TableMetadata, TableRef, VectorIndex
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable
     from typing import Self
 
     from vastdb.table import ITable
@@ -27,6 +28,31 @@ if TYPE_CHECKING:
 
 
 _logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class TypedColumn:
+    """Declaration for a typed metadata column.
+
+    Attributes:
+        default: Static default value when the key is absent from metadata.
+        default_factory: Callable returning a fresh default (e.g. timestamps).
+            Takes precedence over *default* when set.
+        pa_type: Optional PyArrow type for coercion (e.g. ``pa.int64()``).
+        backfill: Whether to merge this column back into metadata on read.
+            Set to ``False`` for infrastructure columns whose defaults
+            should not leak into user-facing metadata.
+    """
+
+    default: Any = ""
+    default_factory: Callable[[], Any] | None = None
+    pa_type: pa.DataType | None = None
+    backfill: bool = True
+
+    def get_default(self) -> Any:
+        if self.default_factory is not None:
+            return self.default_factory()
+        return self.default
 
 # Lazy-cached ADBC dbapi module (DF-f: avoid per-call import overhead).
 _adbc_dbapi: types.ModuleType | None = None
@@ -83,7 +109,11 @@ class VastDBVectorStore(VectorStore):
             )
     """
 
-    _typed_metadata_columns: tuple[str, ...] = ()
+    _typed_metadata_columns: dict[str, TypedColumn] = {}
+    _store_full_metadata_json: bool = False
+
+    def _typed_column_names(self) -> tuple[str, ...]:
+        return tuple(self._typed_metadata_columns.keys())
 
     def __init__(
         self,
@@ -316,11 +346,12 @@ class VastDBVectorStore(VectorStore):
         Returns:
             List of column name strings.
         """
-        if self._typed_metadata_columns:
+        typed_names = self._typed_column_names()
+        if typed_names:
             return [
                 self._id_column,
                 self._text_column,
-                *self._typed_metadata_columns,
+                *typed_names,
                 self._metadata_column,
             ]
         return [self._id_column, self._text_column, self._metadata_column]
@@ -470,14 +501,28 @@ class VastDBVectorStore(VectorStore):
         if not self._typed_metadata_columns:
             return {self._metadata_column: [json.dumps(m) for m in metadatas]}
 
-        result: dict[str, list] = {col: [] for col in self._typed_metadata_columns}
-        remainders: list[dict] = []
+        typed_names = self._typed_column_names()
+        result: dict[str, list] = {col: [] for col in typed_names}
+        json_blobs: list[str] = []
+
         for m in metadatas:
             m_copy = dict(m)
-            for col in self._typed_metadata_columns:
-                result[col].append(m_copy.pop(col, ""))
-            remainders.append(m_copy)
-        result[self._metadata_column] = [json.dumps(r) for r in remainders]
+            for col in typed_names:
+                tc = self._typed_metadata_columns[col]
+                default = tc.get_default()
+                if self._store_full_metadata_json:
+                    val = m_copy.get(col, default)
+                else:
+                    val = m_copy.pop(col, default)
+                result[col].append(val)
+            json_blobs.append(json.dumps(m_copy))
+
+        for col in typed_names:
+            tc = self._typed_metadata_columns[col]
+            if tc.pa_type is not None:
+                result[col] = pa.array(result[col], type=tc.pa_type)
+
+        result[self._metadata_column] = json_blobs
         return result
 
     def similarity_search(
@@ -1033,8 +1078,8 @@ class VastDBVectorStore(VectorStore):
         page_content = row.get(self._text_column) or ""
         metadata_raw = row.get(self._metadata_column)
         metadata = json.loads(metadata_raw) if metadata_raw else {}
-        for col in self._typed_metadata_columns:
-            if col not in metadata:
+        for col, tc in self._typed_metadata_columns.items():
+            if tc.backfill and col not in metadata:
                 val = row.get(col)
                 if val:
                     metadata[col] = val

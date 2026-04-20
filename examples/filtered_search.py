@@ -26,7 +26,7 @@ import vastdb
 from dotenv import load_dotenv
 from langchain_core.embeddings import FakeEmbeddings
 
-from langchain_vastdb import VastDBVectorStore
+from langchain_vastdb import TypedColumn, VastDBVectorStore
 
 # ---------------------------------------------------------------------------
 # 0. Load environment variables from .env (same mechanism as conftest.py).
@@ -57,7 +57,10 @@ BUCKET = os.environ.get("VASTDB__BUCKET", "example-bucket")
 class FilterableStore(VastDBVectorStore):
     """VastDBVectorStore with typed columns for filtered search."""
 
-    _typed_metadata_columns = ("category", "level")
+    _typed_metadata_columns = {
+        "category": TypedColumn(),
+        "level": TypedColumn(),
+    }
 
 
 # ---------------------------------------------------------------------------

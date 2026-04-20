@@ -331,13 +331,16 @@ The base class stores metadata as a single JSON string column. If you need typed
 columns for performance-critical filtering, set `_typed_metadata_columns`:
 
 ```python
-from langchain_vastdb import VastDBVectorStore
+from langchain_vastdb import TypedColumn, VastDBVectorStore
 
 
 class TypedMetadataStore(VastDBVectorStore):
     """Store with typed 'category' and 'priority' metadata columns."""
 
-    _typed_metadata_columns = ("category", "priority")
+    _typed_metadata_columns = {
+        "category": TypedColumn(),
+        "priority": TypedColumn(),
+    }
 ```
 
 This automatically extracts `category` and `priority` into separate typed columns
@@ -345,7 +348,8 @@ on insert, preserves any extra metadata in the JSON column, and merges everythin
 back together on read. The public LangChain interface (`add_texts`,
 `similarity_search`, etc.) stays unchanged.
 
-For custom defaults or type coercion, override `_metadata_columns()` directly
+Use `TypedColumn` fields for custom defaults, PyArrow type coercion, or
+controlling which columns are backfilled on read
 (see the [Migration Guide](docs/migration-guide.md) for details).
 
 ## Examples
