@@ -394,9 +394,10 @@ class VastDBVectorStore(VectorStore):
     ) -> list[str]:
         """Insert vectors into VastDB.
 
-        Default hook implementation that builds a PyArrow RecordBatch
-        and inserts it into the configured table. Subclasses can override
-        this to customize insertion behavior (e.g., typed metadata columns).
+        Builds a PyArrow RecordBatch from the core columns (id, text,
+        vector) plus whatever ``_metadata_columns`` returns, then inserts
+        the batch.  Subclasses that only need to change column layout
+        should override ``_metadata_columns`` instead of this method.
 
         Args:
             texts: The original text strings.
@@ -412,14 +413,13 @@ class VastDBVectorStore(VectorStore):
             return ids
         vector_dim = len(embeddings[0])
         vector_type = pa.list_(pa.field("item", pa.float32(), nullable=False), vector_dim)
-        batch = pa.RecordBatch.from_pydict(
-            {
-                self._id_column: ids,
-                self._text_column: texts,
-                self._vector_column: pa.array(embeddings, type=vector_type),
-                self._metadata_column: [json.dumps(m) for m in metadatas],
-            }
-        )
+        columns: dict[str, Any] = {
+            self._id_column: ids,
+            self._text_column: texts,
+            self._vector_column: pa.array(embeddings, type=vector_type),
+        }
+        columns.update(self._metadata_columns(metadatas))
+        batch = pa.RecordBatch.from_pydict(columns)
         if tx is not None:
             table = self._get_table(tx)
             table.insert(batch)
@@ -429,6 +429,30 @@ class VastDBVectorStore(VectorStore):
             table = self._get_table(new_tx)
             table.insert(batch)
             return ids
+
+    def _metadata_columns(
+        self,
+        metadatas: list[dict],
+    ) -> dict[str, list]:
+        """Return column-name → values mapping for metadata storage.
+
+        Called by ``_insert_vectors`` to build the metadata portion of
+        the PyArrow RecordBatch.  The default serialises each dict to
+        JSON in the configured metadata column.
+
+        Subclasses that use typed columns instead of (or alongside) the
+        JSON column should override this method.  This avoids duplicating
+        the vector-type construction and transaction logic that live in
+        ``_insert_vectors``.
+
+        Args:
+            metadatas: One metadata dict per document.
+
+        Returns:
+            Dict mapping column names to lists of per-row values.
+            Each list must have the same length as *metadatas*.
+        """
+        return {self._metadata_column: [json.dumps(m) for m in metadatas]}
 
     def similarity_search(
         self,

@@ -1,7 +1,7 @@
 """Subclassing VastDBVectorStore with typed metadata columns.
 
-Demonstrates the Template Method pattern by overriding the
-``_insert_vectors`` and ``_row_to_document`` hooks to replace the
+Demonstrates the Template Method pattern by overriding
+``_metadata_columns`` and ``_row_to_document`` to replace the
 default JSON metadata column with typed columns (category, source).
 
 Prerequisites:
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import pyarrow as pa
 import vastdb
@@ -25,9 +25,6 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import FakeEmbeddings
 
 from langchain_vastdb import VastDBVectorStore
-
-if TYPE_CHECKING:
-    from vastdb.transaction import Transaction
 
 # ---------------------------------------------------------------------------
 # 0. Load environment variables from .env (same mechanism as conftest.py).
@@ -51,21 +48,25 @@ BUCKET = os.environ.get("VASTDB__BUCKET", "example-bucket")
 #    This enables efficient columnar filtering in VastDB.
 #
 #    Only three hooks need overriding:
-#      - _insert_vectors: build a RecordBatch with typed columns
+#      - _metadata_columns: define typed column layout (replaces JSON)
 #      - _row_to_document: reconstruct Document metadata from typed columns
 #      - _select_columns: tell the base class which columns to SELECT
 # ---------------------------------------------------------------------------
 
 
 class TypedMetadataStore(VastDBVectorStore):
-    """A VastDBVectorStore that stores metadata in typed columns."""
+    """A VastDBVectorStore that stores metadata in typed columns.
 
-    # Column names for the typed metadata fields.
+    Only two hooks need overriding:
+      - _metadata_columns: define the column layout for inserts
+      - _row_to_document: reconstruct Document metadata from typed columns
+      - _select_columns: tell the base class which columns to SELECT
+    """
+
     CATEGORY_COLUMN = "category"
     SOURCE_COLUMN = "source"
 
     def _select_columns(self) -> list[str]:
-        """Return typed metadata columns instead of the JSON metadata column."""
         return [
             self._id_column,
             self._text_column,
@@ -73,61 +74,18 @@ class TypedMetadataStore(VastDBVectorStore):
             self.SOURCE_COLUMN,
         ]
 
-    def _insert_vectors(
-        self,
-        texts: list[str],
-        embeddings: list[list[float]],
-        metadatas: list[dict],
-        ids: list[str],
-        *,
-        tx: Transaction | None = None,
-    ) -> list[str]:
-        """Insert vectors with typed metadata columns instead of JSON.
-
-        Builds a PyArrow RecordBatch that includes separate "category" and
-        "source" columns rather than packing everything into a single JSON
-        metadata column.
-        """
-        if not embeddings:
-            return ids
-
-        vector_dim = len(embeddings[0])
-        vector_type = pa.list_(
-            pa.field("item", pa.float32(), nullable=False), vector_dim
-        )
-
-        # Build a RecordBatch with typed columns for category and source.
-        batch = pa.RecordBatch.from_pydict(
-            {
-                self._id_column: ids,
-                self._text_column: texts,
-                self._vector_column: pa.array(embeddings, type=vector_type),
-                self.CATEGORY_COLUMN: [m.get("category", "") for m in metadatas],
-                self.SOURCE_COLUMN: [m.get("source", "") for m in metadatas],
-            }
-        )
-
-        if tx is not None:
-            table = self._get_table(tx)
-            table.insert(batch)
-            return ids
-
-        with self._session.transaction() as new_tx:
-            table = self._get_table(new_tx)
-            table.insert(batch)
-            return ids
+    def _metadata_columns(self, metadatas: list[dict]) -> dict[str, list]:
+        """Store category and source as typed columns instead of JSON."""
+        return {
+            self.CATEGORY_COLUMN: [m.get("category", "") for m in metadatas],
+            self.SOURCE_COLUMN: [m.get("source", "") for m in metadatas],
+        }
 
     def _row_to_document(
         self,
         row: dict,
         score: float | None = None,
     ) -> Document:
-        """Reconstruct a Document from typed metadata columns.
-
-        Reads "category" and "source" from the row dict (instead of
-        deserializing a JSON blob) and packs them into the Document's
-        metadata dict.
-        """
         page_content = row.get(self._text_column, "")
         metadata: dict[str, Any] = {
             "category": row.get(self.CATEGORY_COLUMN, ""),
