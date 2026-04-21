@@ -35,6 +35,7 @@ dev = [
     "pytest-asyncio",
     "langchain-tests>=1.1,<2",
     "python-dotenv",
+    "pytest-xdist>=3.8.0",
 ]
 
 [tool.hatch.build]
@@ -64,3 +65,4 @@ select = ["E", "F", "I", "W", "UP"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "-n auto"

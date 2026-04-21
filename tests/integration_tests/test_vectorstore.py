@@ -52,15 +52,48 @@ _ARROW_SCHEMA = pa.schema([
 
 
 # ---------------------------------------------------------------------------
-# Shared fixture helper
+# Shared fixtures (module-scoped session + schema, function-scoped table)
 # ---------------------------------------------------------------------------
 
 
-def _build_vectorstore() -> Generator[VectorStore, None, None]:
+@pytest.fixture(scope="module")
+def _vastdb_session():
+    """Single VAST session shared across all tests in this module."""
+    # Note: adbc_driver is NOT passed to vastdb.connect() — the SDK would route
+    # it through the HTTPS endpoint (TLS issues). VastDBVectorStore opens its own
+    # ADBC connection directly to adbc_endpoint (the QueryEngine IP).
+    session = vastdb.connect(
+        endpoint=os.environ["VASTDB__ENDPOINT"],
+        access=os.environ["VASTDB__ACCESS_KEY"],
+        secret=os.environ["VASTDB__SECRET_KEY"],
+        timeout=10,
+        ssl_verify=False,
+        backoff_config=BackoffConfig(max_tries=2, max_time=15.0),
+    )
+    yield session
+
+
+@pytest.fixture(scope="module")
+def _vastdb_schema(_vastdb_session):
+    """Single schema shared across all tests in this module; dropped on teardown."""
+    bucket = os.environ["VASTDB__BUCKET"]
+    schema = f"lc_vs_it_{uuid.uuid4().hex[:12]}"
+    with _vastdb_session.transaction() as tx:
+        tx.bucket(bucket).create_schema(schema)
+    yield schema
+    try:
+        with _vastdb_session.transaction() as tx:
+            tx.bucket(bucket).schema(schema).drop()
+    except Exception:
+        pass
+
+
+def _build_vectorstore(session: Any, schema: str) -> Generator[VectorStore, None, None]:
     """Yield an empty VastDBVectorStore backed by a dedicated, isolated test table.
 
-    Creates a uniquely-named schema and table on the test VAST cluster before
-    yielding, and drops both unconditionally in the finally block.
+    Reuses the module-scoped session and schema; only creates/drops the table so
+    each test gets a clean slate without the cost of reconnecting or recreating the
+    schema on every function.
 
     Required env vars: VASTDB__ENDPOINT, VASTDB__ACCESS_KEY, VASTDB__SECRET_KEY,
     VASTDB__BUCKET. Optional: VASTDB__ADBC_DRIVER_PATH + VASTDB__ADBC_ENDPOINT
@@ -68,32 +101,16 @@ def _build_vectorstore() -> Generator[VectorStore, None, None]:
     index required). Load env vars via your IDE's run config, `direnv`, or
     `set -a && source .env && set +a`.
     """
-    endpoint = os.environ["VASTDB__ENDPOINT"]
+    bucket = os.environ["VASTDB__BUCKET"]
     access_key = os.environ["VASTDB__ACCESS_KEY"]
     secret_key = os.environ["VASTDB__SECRET_KEY"]
-    bucket = os.environ["VASTDB__BUCKET"]
-    run_id = uuid.uuid4().hex[:12]
-    schema = f"lc_vs_it_{run_id}"
-    table_name = f"lc_vs_it_{run_id}"
+    table_name = f"lc_vs_it_{uuid.uuid4().hex[:12]}"
 
     adbc_driver_path = os.environ.get("VASTDB__ADBC_DRIVER_PATH")
     adbc_endpoint = os.environ.get("VASTDB__ADBC_ENDPOINT")
-    # Note: adbc_driver is NOT passed to vastdb.connect() — the SDK would route
-    # it through the HTTPS endpoint (TLS issues). VastDBVectorStore opens its own
-    # ADBC connection directly to adbc_endpoint (the QueryEngine IP).
-    session = vastdb.connect(
-        endpoint=endpoint,
-        access=access_key,
-        secret=secret_key,
-        timeout=10,
-        ssl_verify=False,
-        backoff_config=BackoffConfig(max_tries=2, max_time=15.0),
-    )
 
     with session.transaction() as tx:
-        b = tx.bucket(bucket)
-        b.create_schema(schema)
-        b.schema(schema).create_table(table_name, _ARROW_SCHEMA)
+        tx.bucket(bucket).schema(schema).create_table(table_name, _ARROW_SCHEMA)
 
     store = VastDBVectorStore(
         embedding=VectorStoreIntegrationTests.get_embeddings(),
@@ -111,9 +128,7 @@ def _build_vectorstore() -> Generator[VectorStore, None, None]:
     finally:
         try:
             with session.transaction() as tx:
-                sc = tx.bucket(bucket).schema(schema)
-                sc.table(table_name).drop()
-                sc.drop()
+                tx.bucket(bucket).schema(schema).table(table_name).drop()
         except Exception:
             pass
 
@@ -136,8 +151,8 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
         return False
 
     @pytest.fixture()
-    def vectorstore(self) -> Generator[VectorStore, None, None]:  # type: ignore[override]
-        yield from _build_vectorstore()
+    def vectorstore(self, _vastdb_session, _vastdb_schema) -> Generator[VectorStore, None, None]:  # type: ignore[override]
+        yield from _build_vectorstore(_vastdb_session, _vastdb_schema)
 
     # -----------------------------------------------------------------------
     # Epic 2 deferred findings — dedicated test cases (AC: #6)
@@ -298,8 +313,8 @@ class TestVastDBRetrieverIntegration(RetrieversIntegrationTests):
     """
 
     @pytest.fixture()
-    def vectorstore(self) -> Generator[VectorStore, None, None]:
-        yield from _build_vectorstore()
+    def vectorstore(self, _vastdb_session, _vastdb_schema) -> Generator[VectorStore, None, None]:
+        yield from _build_vectorstore(_vastdb_session, _vastdb_schema)
 
     @pytest.fixture(autouse=True)
     def _seed_and_bind(self, vectorstore: VectorStore) -> None:
