@@ -110,8 +110,6 @@ class VastDBVectorStore(VectorStore):
     """
 
     _typed_metadata_columns: dict[str, TypedColumn] = {}
-    _store_full_metadata_json: bool = False
-
     def _typed_column_names(self) -> tuple[str, ...]:
         return tuple(self._typed_metadata_columns.keys())
 
@@ -506,10 +504,7 @@ class VastDBVectorStore(VectorStore):
             for col in typed_names:
                 tc = self._typed_metadata_columns[col]
                 default = tc.get_default()
-                if self._store_full_metadata_json:
-                    val = m_copy.get(col, default)
-                else:
-                    val = m_copy.pop(col, default)
+                val = m_copy.pop(col, default)
                 result[col].append(val)
             json_blobs.append(json.dumps(m_copy))
 

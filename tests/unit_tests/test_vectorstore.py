@@ -1070,7 +1070,6 @@ class DictTypedColumnStore(VastDBVectorStore):
             backfill=False,
         ),
     }
-    _store_full_metadata_json = True
 
 
 @pytest.fixture
@@ -1141,39 +1140,6 @@ def test_dict_typed_columns_backfill_true_merged(dict_typed_store):
     assert doc.metadata["extra"] == "val"
     assert "status" not in doc.metadata
     assert "created_at" not in doc.metadata
-
-
-def test_store_full_metadata_json_keeps_all_fields(dict_typed_store):
-    meta = {
-        "chunk_id": "c1",
-        "agent_id": "a1",
-        "status": "completed",
-        "created_at": 1000,
-        "updated_at": 2000,
-        "model_used": "llava",
-    }
-    cols = dict_typed_store._metadata_columns([meta])
-    stored = json.loads(cols["metadata"][0])
-    assert stored == meta
-
-
-def test_store_full_metadata_json_with_backfill_false(dict_typed_store):
-    meta = {"foo": "bar"}
-    cols = dict_typed_store._metadata_columns([meta])
-    stored = json.loads(cols["metadata"][0])
-    assert stored == {"foo": "bar"}
-    row = {
-        "id": "1",
-        "text": "hello",
-        "chunk_id": "",
-        "agent_id": "",
-        "status": "completed",
-        "created_at": 9999,
-        "updated_at": 8888,
-        "metadata": cols["metadata"][0],
-    }
-    doc = dict_typed_store._row_to_document(row)
-    assert doc.metadata == {"foo": "bar"}
 
 
 def test_dict_typed_columns_select_columns_auto_derived(dict_typed_store):
