@@ -346,15 +346,11 @@ class VastDBVectorStore(VectorStore):
         Returns:
             List of column name strings.
         """
+        columns = [self._id_column, self._text_column, self._metadata_column]
         typed_names = self._typed_column_names()
         if typed_names:
-            return [
-                self._id_column,
-                self._text_column,
-                *typed_names,
-                self._metadata_column,
-            ]
-        return [self._id_column, self._text_column, self._metadata_column]
+            columns.extend(typed_names)
+        return columns
 
     def add_texts(
         self,
