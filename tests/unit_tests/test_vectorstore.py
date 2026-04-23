@@ -375,7 +375,7 @@ class TypedColumnStore(VastDBVectorStore):
 
 
 def test_metadata_columns_default_serializes_json(vectorstore):
-    result = vectorstore._metadata_columns([{"k": "v"}, {"k2": "v2"}])
+    result = vectorstore._build_metadata_columns([{"k": "v"}, {"k2": "v2"}])
     assert list(result.keys()) == ["metadata"]
     assert result["metadata"] == ['{"k": "v"}', '{"k2": "v2"}']
 
@@ -390,7 +390,7 @@ def test_typed_metadata_columns_pops_fields_and_dumps_remainder(
         schema="s",
         table_name="t",
     )
-    result = store._metadata_columns([
+    result = store._build_metadata_columns([
         {"category": "db", "source": "docs", "extra": "val"},
     ])
     assert result["category"] == ["db"]
@@ -1088,7 +1088,7 @@ def dict_typed_store(mock_session, fake_embedding, mock_transaction):
 
 
 def test_dict_typed_columns_with_custom_defaults(dict_typed_store):
-    cols = dict_typed_store._metadata_columns([{"foo": "bar"}])
+    cols = dict_typed_store._build_metadata_columns([{"foo": "bar"}])
     assert cols["chunk_id"] == [""]
     assert cols["agent_id"] == [""]
     assert cols["status"] == ["completed"]
@@ -1099,7 +1099,7 @@ def test_dict_typed_columns_with_custom_defaults(dict_typed_store):
 def test_dict_typed_columns_with_pa_type_coercion(dict_typed_store):
     import pyarrow as pa
 
-    cols = dict_typed_store._metadata_columns([{"created_at": 1000, "updated_at": 2000}])
+    cols = dict_typed_store._build_metadata_columns([{"created_at": 1000, "updated_at": 2000}])
     assert isinstance(cols["created_at"], pa.Array)
     assert cols["created_at"].type == pa.int64()
     assert cols["created_at"].to_pylist() == [1000]

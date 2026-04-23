@@ -83,7 +83,7 @@ class VastDBVectorStore(VectorStore):
     Protected hook methods are available for subclass customization:
 
     - ``_insert_vectors`` — customize record insertion
-    - ``_metadata_columns`` — customize column layout for metadata storage
+    - ``_build_metadata_columns`` — customize column layout for metadata storage
     - ``_vector_search`` — customize similarity search behavior
     - ``_delete_by_ids`` — customize document deletion
     - ``_get_by_ids`` — customize document retrieval by ID
@@ -93,7 +93,7 @@ class VastDBVectorStore(VectorStore):
     For the common case of typed metadata columns (e.g., ``category``,
     ``source``), set the ``_typed_metadata_columns`` class attribute
     instead of overriding hooks manually.  This auto-derives
-    ``_select_columns``, ``_metadata_columns``, and ``_row_to_document``.
+    ``_select_columns``, ``_build_metadata_columns``, and ``_row_to_document``.
 
     Example:
         .. code-block:: python
@@ -110,6 +110,7 @@ class VastDBVectorStore(VectorStore):
     """
 
     _typed_metadata_columns: dict[str, TypedColumn] = {}
+
     def _typed_column_names(self) -> tuple[str, ...]:
         return tuple(self._typed_metadata_columns.keys())
 
@@ -434,9 +435,9 @@ class VastDBVectorStore(VectorStore):
         """Insert vectors into VastDB.
 
         Builds a PyArrow RecordBatch from the core columns (id, text,
-        vector) plus whatever ``_metadata_columns`` returns, then inserts
+        vector) plus whatever ``_build_metadata_columns`` returns, then inserts
         the batch.  Subclasses that only need to change column layout
-        should override ``_metadata_columns`` instead of this method.
+        should override ``_build_metadata_columns`` instead of this method.
 
         Args:
             texts: The original text strings.
@@ -457,7 +458,7 @@ class VastDBVectorStore(VectorStore):
             self._text_column: texts,
             self._vector_column: pa.array(embeddings, type=vector_type),
         }
-        columns.update(self._metadata_columns(metadatas))
+        columns.update(self._build_metadata_columns(metadatas))
         batch = pa.RecordBatch.from_pydict(columns)
         if tx is not None:
             table = self._get_table(tx)
@@ -469,21 +470,43 @@ class VastDBVectorStore(VectorStore):
             table.insert(batch)
             return ids
 
-    def _metadata_columns(
+    def _build_metadata_columns(
         self,
         metadatas: list[dict],
     ) -> dict[str, list]:
-        """Return column-name -> values mapping for metadata storage.
+        """Serialize metadata dicts into a column-name -> values mapping.
 
         Called by ``_insert_vectors`` to build the metadata portion of
         the PyArrow RecordBatch.
 
         When ``_typed_metadata_columns`` is set, pops those keys into
         separate typed columns and dumps the remainder as JSON.  When
-        empty (default), serialises each dict to the JSON metadata column.
+        empty (default), serializes each dict to the JSON metadata column.
 
         Subclasses needing custom defaults or type coercion should
         override this method directly.
+
+        Examples:
+            No typed columns (default) — everything goes into the JSON blob::
+
+                metadatas = [{"source": "a.txt", "score": 0.9},
+                             {"source": "b.txt", "score": 0.4}]
+                # _typed_metadata_columns = {}
+                _build_metadata_columns(metadatas)
+                # {
+                #   "metadata": ['{"source": "a.txt", "score": 0.9}',
+                #                '{"source": "b.txt", "score": 0.4}']
+                # }
+
+            With typed columns — ``source`` is promoted to its own column,
+            remainder stays in the JSON blob::
+
+                # _typed_metadata_columns = {"source": TypedColumn(pa_type=pa.string())}
+                _build_metadata_columns(metadatas)
+                # {
+                #   "source":   ["a.txt", "b.txt"],
+                #   "metadata": ['{"score": 0.9}', '{"score": 0.4}']
+                # }
 
         Args:
             metadatas: One metadata dict per document.
@@ -492,10 +515,17 @@ class VastDBVectorStore(VectorStore):
             Dict mapping column names to lists of per-row values.
             Each list must have the same length as *metadatas*.
         """
-        if not self._typed_metadata_columns:
+        if not (typed_names := self._typed_column_names()):
             return {self._metadata_column: [json.dumps(m) for m in metadatas]}
 
-        typed_names = self._typed_column_names()
+        # Precompute defaults once — static defaults are constant across rows;
+        # default_factory columns still call get_default() per row below.
+        static_defaults = {
+            col: self._typed_metadata_columns[col].default
+            for col in typed_names
+            if self._typed_metadata_columns[col].default_factory is None
+        }
+
         result: dict[str, list] = {col: [] for col in typed_names}
         json_blobs: list[str] = []
 
@@ -503,9 +533,8 @@ class VastDBVectorStore(VectorStore):
             m_copy = dict(m)
             for col in typed_names:
                 tc = self._typed_metadata_columns[col]
-                default = tc.get_default()
-                val = m_copy.pop(col, default)
-                result[col].append(val)
+                default = tc.get_default() if tc.default_factory is not None else static_defaults[col]
+                result[col].append(m_copy.pop(col, default))
             json_blobs.append(json.dumps(m_copy))
 
         for col in typed_names:
