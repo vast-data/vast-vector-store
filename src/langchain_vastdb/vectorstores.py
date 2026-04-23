@@ -8,6 +8,7 @@ import math
 import types
 import uuid
 from collections import Counter
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -334,6 +335,15 @@ class VastDBVectorStore(VectorStore):
         self._metadata_loaded = False
         self._table_metadata = TableMetadata(ref=self._table_ref)
 
+    @contextmanager
+    def _ensure_tx(self, tx: Transaction | None):
+        """Yield *tx* if provided, otherwise open and yield a new transaction."""
+        if tx is not None:
+            yield tx
+        else:
+            with self._session.transaction() as new_tx:
+                yield new_tx
+
     def _select_columns(self) -> list[str]:
         """Return column names for full-row retrieval (excludes vectors).
 
@@ -461,13 +471,8 @@ class VastDBVectorStore(VectorStore):
         }
         columns.update(self._build_metadata_columns(metadatas))
         batch = pa.RecordBatch.from_pydict(columns)
-        if tx is not None:
-            table = self._get_table(tx)
-            table.insert(batch)
-            return ids
-
-        with self._session.transaction() as new_tx:
-            table = self._get_table(new_tx)
+        with self._ensure_tx(tx) as active_tx:
+            table = self._get_table(active_tx)
             table.insert(batch)
             return ids
 
@@ -690,16 +695,8 @@ class VastDBVectorStore(VectorStore):
         if not ids:
             return True
         predicate = ibis._[self._id_column].isin(ids)
-        if tx is not None:
-            table = self._get_table(tx)
-            rows = table.select(
-                columns=[self._id_column], predicate=predicate, internal_row_id=True
-            ).read_all()
-            table.delete(rows)
-            return True
-
-        with self._session.transaction() as new_tx:
-            table = self._get_table(new_tx)
+        with self._ensure_tx(tx) as active_tx:
+            table = self._get_table(active_tx)
             rows = table.select(
                 columns=[self._id_column], predicate=predicate, internal_row_id=True
             ).read_all()
@@ -750,13 +747,8 @@ class VastDBVectorStore(VectorStore):
         """
         predicate = ibis._[self._id_column].isin(ids)
         columns = self._select_columns()
-        if tx is not None:
-            table = self._get_table(tx)
-            reader = table.select(columns=columns, predicate=predicate)
-            return reader.read_all().to_pylist()
-
-        with self._session.transaction() as new_tx:
-            table = self._get_table(new_tx)
+        with self._ensure_tx(tx) as active_tx:
+            table = self._get_table(active_tx)
             reader = table.select(columns=columns, predicate=predicate)
             return reader.read_all().to_pylist()
 
@@ -822,11 +814,8 @@ class VastDBVectorStore(VectorStore):
             List of (row_dict, distance_score) tuples.
         """
         columns = self._select_columns()
-        if tx is not None:
-            return self._do_vector_search(tx, query_vector, k, columns, predicate, filter_dict)
-
-        with self._session.transaction() as new_tx:
-            return self._do_vector_search(new_tx, query_vector, k, columns, predicate, filter_dict)
+        with self._ensure_tx(tx) as active_tx:
+            return self._do_vector_search(active_tx, query_vector, k, columns, predicate, filter_dict)
 
     def _do_vector_search(
         self,
