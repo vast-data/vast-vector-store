@@ -1173,6 +1173,5 @@ def test_dict_typed_columns_used_by_insert_vectors(
     assert batch.column("agent_id").to_pylist() == ["a1"]
     assert batch.column("status").to_pylist() == ["completed"]
     stored = json.loads(batch.column("metadata").to_pylist()[0])
-    assert stored["chunk_id"] == "c1"
-    assert stored["model_used"] == "test"
+    assert stored == {"model_used": "test"}
 
