@@ -39,15 +39,16 @@ class TypedColumn:
         default_factory: Callable returning a fresh default (e.g. timestamps).
             Takes precedence over *default* when set.
         pa_type: Optional PyArrow type for coercion (e.g. ``pa.int64()``).
-        backfill: Whether to merge this column back into metadata on read.
-            Set to ``False`` for infrastructure columns whose defaults
-            should not leak into user-facing metadata.
+        include_in_metadata: Whether to merge this column back into metadata on read.
+            Set to ``False`` for infrastructure columns (e.g. ``tenant_id``,
+            ``shard_key``) that exist for DB-level filtering but should not
+            appear in user-facing ``Document.metadata``.
     """
 
     default: Any = ""
     default_factory: Callable[[], Any] | None = None
     pa_type: pa.DataType | None = None
-    backfill: bool = True
+    include_in_metadata: bool = True
 
     def get_default(self) -> Any:
         if self.default_factory is not None:
@@ -1099,7 +1100,7 @@ class VastDBVectorStore(VectorStore):
         metadata_raw = row.get(self._metadata_column)
         metadata = json.loads(metadata_raw) if metadata_raw else {}
         for col, tc in self._typed_metadata_columns.items():
-            if tc.backfill and col not in metadata:
+            if tc.include_in_metadata and col not in metadata:
                 val = row.get(col)
                 if val:
                     metadata[col] = val

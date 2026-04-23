@@ -74,7 +74,7 @@ This automatically:
 - Merges typed columns back into metadata on read
 - Derives `_select_columns` to include both typed and JSON columns
 
-Use `TypedColumn` fields for custom defaults, type coercion, or backfill control.
+Use `TypedColumn` fields for custom defaults, type coercion, or `include_in_metadata` control.
 
 ### Hook signatures
 

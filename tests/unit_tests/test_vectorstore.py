@@ -1058,16 +1058,16 @@ class DictTypedColumnStore(VastDBVectorStore):
     _typed_metadata_columns = {
         "chunk_id": TypedColumn(),
         "agent_id": TypedColumn(),
-        "status": TypedColumn(default="completed", backfill=False),
+        "status": TypedColumn(default="completed", include_in_metadata=False),
         "created_at": TypedColumn(
             default_factory=lambda: 9999,
             pa_type=__import__("pyarrow").int64(),
-            backfill=False,
+            include_in_metadata=False,
         ),
         "updated_at": TypedColumn(
             default_factory=lambda: 8888,
             pa_type=__import__("pyarrow").int64(),
-            backfill=False,
+            include_in_metadata=False,
         ),
     }
 
@@ -1105,7 +1105,7 @@ def test_dict_typed_columns_with_pa_type_coercion(dict_typed_store):
     assert cols["created_at"].to_pylist() == [1000]
 
 
-def test_dict_typed_columns_backfill_false_not_merged(dict_typed_store):
+def test_dict_typed_columns_include_in_metadata_false_not_merged(dict_typed_store):
     row = {
         "id": "1",
         "text": "hello",
@@ -1123,7 +1123,7 @@ def test_dict_typed_columns_backfill_false_not_merged(dict_typed_store):
     assert "updated_at" not in doc.metadata
 
 
-def test_dict_typed_columns_backfill_true_merged(dict_typed_store):
+def test_dict_typed_columns_include_in_metadata_true_merged(dict_typed_store):
     row = {
         "id": "1",
         "text": "hello",
