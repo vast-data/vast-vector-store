@@ -159,21 +159,44 @@ This is the most subtle stage. Loop inline:
 
 Update the run log at every iteration.
 
-### Stage 5 — Tech writer (conditional, inline skill invocation)
+### Stage 5 — Documentation sync (always runs, inline)
 
-Skip entirely if `--no-tech-writer` was set.
+**This stage ALWAYS runs** unless `--no-tech-writer` was set. There is no trigger heuristic. Stale docs are a big risk to BMad agents and humans on later stories — every story must leave the docs consistent.
 
-**Trigger heuristic** (orchestrator decides, not the skill):
-- Re-read the story file's `File List` section (use `Grep` + small `Read`).
-- Trigger if any of: a file matching `README*`, `CHANGELOG*`, `docs/**`, `examples/**`; a new public module/class/function in package source (e.g. `src/**/__init__.py`, anything not under `tests/`); a new CLI entry point (`pyproject.toml` `[project.scripts]` change); a new public configuration knob.
-- Otherwise skip and log "no doc-worthy changes detected" in the run log.
+**Mission:** Audit *every* project documentation file against the changes made in this story and update the ones the changes impact. Coverage spans READMEs, architecture docs, API references, custom internal docs (e.g. `docs/TESTING.md`, `docs/RUNNING-CONFIGURATIONS.md`), and runbooks.
 
-If triggered:
-- Read the `tech-writer` block in `references/stage-prompts.md` for the overrides (skip the Paige persona/menu, go straight to edits, return skipped with a one-liner if nothing meaningful to update).
-- Invoke `bmad-agent-tech-writer` via the `Skill` tool (the `WD` / write-document action). Make actual edits — do not propose. Commit as `docs:` per commit discipline.
-- Append `### 5-tech-writer (done)` or `### 5-tech-writer (skipped: <reason>)` to the run log.
+**Procedure:**
 
-Advance regardless of skipped/done.
+1. **Use the change context already in this turn.** The dev-story and review stages just ran inline; the diff is in your working memory. Do not re-`git diff` the whole branch. Re-read only what you need: the story's `File List` section (small `Grep`/`Read`) and, if a specific doc edit is uncertain, the relevant span of the changed file.
+
+2. **Enumerate the documentation surface.** Resolve `{project_knowledge}` from `_bmad/bmm/config.yaml` (e.g. `docs/`). List candidate doc files: `find <project_knowledge> -name '*.md' -not -path '*/archive/*'` plus repo-root `README*` / `CHANGELOG*`. Anything under `archive/**` is out of scope.
+
+3. **Decide impact per doc, cheaply.** For each candidate, `Grep` for keywords from the changes (changed file basenames, new symbol names, route paths, test count strings, story key) before `Read`-ing. Common patterns to watch:
+   - `README*` / `CHANGELOG*` → user-facing surface change, new feature.
+   - `docs/architecture/**` → new module/service, changed boundary, schema change.
+   - `docs/api*` / `docs/openapi*` → route added/changed/removed, schema change.
+   - `docs/TESTING.md` (or any test inventory) → ANY test added/renamed/deleted in any suite. Update both per-suite counts and the per-story addendum.
+   - `docs/RUNNING-CONFIGURATIONS.md` / runbooks → Taskfile change, env var change, new service.
+   - Story/QA/retrospective docs in `docs/stories/`, `docs/qa/`, `docs/retrospectives/` are owned by other BMad stages — leave alone unless the diff clearly contradicts them.
+
+4. **Make the edits inline.** Use `Edit` (preferred) on each impacted doc. Keep edits minimal and targeted — append the new row, bump counts, add the new route. Do not refactor unrelated sections.
+
+5. **Loop in the tech writer where it adds value.** `bmad-agent-tech-writer` stays part of this stage — invoke it via the `Skill` tool when:
+   - **`VD` (validate-doc):** after edits to higher-stakes docs (`README*`, `docs/architecture/**`, public API references), run `VD` to check the edited doc against documentation standards. Apply the validator's actionable findings inline; ignore stylistic noise.
+   - **`WD` (write-document):** when the story introduces a new concept with no existing doc home and a new doc must be created from scratch. For routine in-place edits to existing docs, do them directly with `Edit` — `WD` is overkill there.
+   - **`MG` (mermaid-gen):** when an architecture doc needs a new/updated diagram for the change.
+
+   In every case, suppress the Paige persona/menu — go straight to the action.
+
+6. **Skip rule (rare).** Only mark `skipped` if, after the audit, no doc relates to the changes. The skip reason in the run log must list which docs were checked and why each was unaffected — a bare "internal feature, no docs to update" is not acceptable.
+
+7. **Commit as `docs:`** per commit discipline. One coherent commit per logical doc update is fine; bundling tightly-related edits is fine.
+
+8. **Run log entry.** Append one of:
+   - `### 5-docs-sync (done)` with a bulleted list of files edited and a one-line rationale per file (note any `VD` validations applied).
+   - `### 5-docs-sync (skipped: <reason>)` listing the docs audited.
+
+Advance regardless of done/skipped.
 
 ### Stage 6 — Push + open MR/PR (inline bash)
 

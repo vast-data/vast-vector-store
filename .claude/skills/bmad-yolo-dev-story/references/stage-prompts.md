@@ -148,30 +148,38 @@ Set `next_action_hint` in the run log entry:
 
 ---
 
-## Stage 5 — Tech writer (`bmad-agent-tech-writer`)
+## Stage 5 — Documentation sync
 
-**Mission:** Update or create project documentation for the changes made in this story.
+**Mission:** Audit every project documentation file against the changes made in this story and update the ones the changes impact. Always runs unless `--no-tech-writer` was set. Full procedure in `references/orchestration.md` § "Stage 5"; this block is the per-stage operating contract.
 
-**Context to have in hand before invoking:**
+**Context to have in hand:**
 - `story_file`, `story_key`
-- File List from the story (grep it out of the story file; do not read the whole story)
-- `{project_knowledge}` path
-- Triggering signals (why the orchestrator decided docs likely need updating — record these in the run log)
+- File List from the story (grep it out — do not read the whole story)
+- `{project_knowledge}` path (resolved from `_bmad/bmm/config.yaml`)
+- The changes themselves: rely on this turn's context from dev-story / review stages. Re-`Read` a specific changed file only as targeted reinforcement; do not re-`git diff` the whole branch.
 
-**YOLO overrides for this stage:**
-- Use the `WD` (write-document) capability. **Do NOT enter the Paige persona greeting / menu loop.** Go directly to making documentation edits.
-- If after inspecting the changes you conclude that no documentation actually needs updating (e.g. internal refactor with no public surface change), return `status: skipped` with a one-line reason in the run log. Do NOT invent doc updates just to have done something.
-- If you do update docs, MAKE THE EDITS — do not propose them, do not write a plan.
+**YOLO overrides:**
+- For inline `Edit` work: just do it. Do not propose, do not write a plan.
+- For `bmad-agent-tech-writer` invocations (`VD`, `WD`, `MG`): **suppress the Paige persona greeting and menu**. Go directly to the requested action.
+- For `VD` (validate-doc): apply actionable findings inline; ignore stylistic noise.
+
+**When to use the tech writer vs direct `Edit`:**
+- `Edit` directly for routine in-place updates (counts, table rows, new route entries, runbook lines).
+- `bmad-agent-tech-writer` `VD` after edits to higher-stakes docs (`README*`, `docs/architecture/**`, public API references).
+- `bmad-agent-tech-writer` `WD` only when creating a brand-new doc because the story introduced a concept with no existing doc home.
+- `bmad-agent-tech-writer` `MG` when an architecture doc needs a new/updated Mermaid diagram.
 
 **Scope guardrails:**
-- Only update docs that relate to the changes in this story. Do not refactor unrelated documentation.
-- Prefer editing existing docs over creating new ones. Create a new doc only if the story introduces a fundamentally new concept that has no existing doc home.
-- README / CHANGELOG / quickstart updates are in scope if user-facing surface changed.
+- Only edit docs the story's changes actually impact. Do not refactor unrelated docs.
+- Story/QA/retrospective docs in `docs/stories/`, `docs/qa/`, `docs/retrospectives/` are owned by other BMad stages — leave alone unless the diff clearly contradicts them.
+- Anything under `archive/**` is out of scope.
 
 **Commit granularity:**
-- One `docs:` commit per coherent doc update (e.g. one for README, one for a new concept doc).
+- `docs:` commits per the commit discipline. One coherent commit per logical doc update; bundling tightly-related edits is fine.
 
-**Definition of done:** Either meaningful doc edits are committed, or the run log entry is `(skipped: <reason>)`.
+**Skip rule (rare):** Only skip if no doc in the project relates to the changes. The skip reason must list the docs audited and why each was unaffected — a bare "internal feature, no docs to update" is NOT acceptable.
+
+**Definition of done:** Either meaningful doc edits are committed, or the run log entry is `(skipped: <reason with audit list>)`.
 
 ---
 
