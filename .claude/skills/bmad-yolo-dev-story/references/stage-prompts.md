@@ -162,9 +162,7 @@ Set `next_action_hint` in the run log entry:
 
 1. **Verify context is `local`** — CLAUDE.md mandates this before any `task test:*`, `task start*`, or `task start-backend`:
    - Run `task ctx`. If it isn't `local`, run `task ctx:local`. If switching fails, halt and escalate (`status: blocked, reason: "could not switch to local context"`).
-2. **Verify all required services are healthy** via `task status`. The full E2E suite requires backend (port 3000), mobile (port 8081), and tablet (port 8082) — see `tests/Taskfile.yml` precondition messages. If any required service is down, halt and escalate with:
-   - `status: blocked, reason: "test gate cannot run — <list of down services>. Start with 'task start' (or the per-service start tasks) and re-run the yolo workflow."`
-   - Do NOT auto-start services. The user owns their local dev environment; auto-starting risks zombie processes, port collisions, and untracked side effects across yolo runs.
+2. **Restart all services** via `task restart` — this stops and starts all services (backend, mobile, tablet), ensuring the latest code changes are loaded. Running processes don't pick up code changes until restarted, so always do this before running the suite even if services appear healthy. If `task restart` fails, halt and escalate with `status: blocked, reason: "task restart failed — <error>. Fix the service startup issue and re-run."`.
 3. **Run the full suite**: `task test:all > /tmp/yolo-tests-<story-key>-iter<N>.log 2>&1`. Capture the exit code. **Do NOT inline the full output into context** — pipe it to disk and `Grep`-slice it.
 4. **On success (exit code 0):**
    - `Grep` the log for the final summary line(s) for each suite (e.g. `Tests:`, `passed`, `failed`) for a one-line confirmation. Do not read the whole log.

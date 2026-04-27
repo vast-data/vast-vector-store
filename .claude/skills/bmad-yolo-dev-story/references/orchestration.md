@@ -155,7 +155,7 @@ This is the most subtle stage. It has three sub-stages that run in a single conv
    - `in-progress` → unresolved `[Review][Patch]`/`[Review][Decision]` items remain. Skip 4b and go directly to **sub-stage 4c** (dev fix) at step 9.
 6. **Sub-stage 4b — Test gate.** Read the `test-gate` block in `references/stage-prompts.md`. The procedure in short:
    - Verify context is `local` via `task ctx` (CLAUDE.md mandate). If not, run `task ctx:local`.
-   - Verify all required services are healthy via `task status`. If anything required for the suite is down, halt with `status: blocked, reason: "test gate cannot run — services not running. Start with 'task start' and re-run."` Do NOT auto-start services; the user is responsible for the local dev environment.
+   - Run `task restart` to stop and start all services, ensuring the latest code changes are loaded before the test suite runs. If it fails, halt and escalate.
    - Run `task test:all`, piping output to `/tmp/yolo-tests-<story-key>-iter<N>.log`. Do NOT inline the full output into context.
    - On pass: append `### 4-review-loop iter N (done, converged)` to the run log with a one-line note that the test gate passed. Exit loop, advance to stage 5.
    - On fail: `Grep` the temp log for failing assertions / error lines and read just those spans. Treat the failures as new follow-up work for the dev-fix sub-stage. Continue to step 7.
