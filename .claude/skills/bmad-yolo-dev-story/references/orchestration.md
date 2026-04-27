@@ -142,22 +142,34 @@ When this stage runs:
   - If anything blocked you → append `### 3-dev-story (blocked)` with the blocker, mark run `status: blocked`, halt.
   - Otherwise re-read the story file's `Status:` line. If it's `review`, append `### 3-dev-story (done)` and advance to stage 4. If anything else (e.g. still `in-progress`), treat as blocked and escalate.
 
-### Stage 4 — Review-fix loop
+### Stage 4 — Review-fix loop (code review ↔ test gate ↔ dev fix)
 
-This is the most subtle stage. Loop inline:
+This is the most subtle stage. It has three sub-stages that run in a single convergence loop: **4a code review**, **4b test gate**, and **4c dev fix**. The loop only exits when both code review (`Status: done`) AND the test gate (`task test:all` green) converge in the same iteration. Loop inline:
 
-1. Re-read the run log for current iteration counter and story file path.
-2. Read the `code-review` block in `references/stage-prompts.md` for the exact YOLO overrides. Critical ones: defer `decision-needed` findings (never resolve them unilaterally), always choose "Batch-apply all" (option 0) for patch findings, choose "Done" (option 3) at the "next steps" prompt.
+1. Re-read the run log for current iteration counter, story file path, and branch.
+2. **Sub-stage 4a — Code review.** Read the `code-review` block in `references/stage-prompts.md` for the exact YOLO overrides. Critical ones: defer `decision-needed` findings (never resolve them unilaterally), always choose "Batch-apply all" (option 0) for patch findings, choose "Done" (option 3) at the "next steps" prompt.
 3. Invoke `bmad-code-review` via the `Skill` tool. It writes findings directly to the story file's `### Review Findings` section, applies non-controversial patches in batch, and updates the story `Status:` to `done` (clean) or `in-progress` (findings remaining). Commit per the commit-discipline rules.
 4. **Do not read the findings block into context** — read back only the story file's `Status:` line (use `Grep` for `^Status:` or `Read` with a small `limit`).
 5. Branch on status:
-   - `done` → review converged. Append `### 4-review-loop iter N (done, converged)` to run log. Exit loop, advance to stage 5.
-   - `in-progress` → unresolved `[Review][Patch]`/`[Review][Decision]` items remain. Continue.
-6. Increment `review_iters_used` in the run log. If it exceeds `max_iters`, append a `### 4-review-loop iter N (blocked, max_iters)` entry with a summary of the still-unresolved findings (grep them from the story file; do not dump them wholesale into context), mark run `status: blocked`, halt. Do NOT push half-reviewed code.
-7. Re-invoke `bmad-dev-story` via the `Skill` tool with the `dev-story` prompt block's **review-continuation** directive: "this is a review continuation — address the `[Review]` follow-up tasks in the story file before any other work." The bmad-dev-story workflow already has logic for this (it detects "Senior Developer Review (AI)" section and prioritizes review follow-ups).
-8. On return, if blocked → escalate. Otherwise append the iter entry to the run log and loop back to step 1.
+   - `done` → code review converged for this iteration. Advance to **sub-stage 4b** (test gate) below.
+   - `in-progress` → unresolved `[Review][Patch]`/`[Review][Decision]` items remain. Skip 4b and go directly to **sub-stage 4c** (dev fix) at step 9.
+6. **Sub-stage 4b — Test gate.** Read the `test-gate` block in `references/stage-prompts.md`. The procedure in short:
+   - Verify context is `local` via `task ctx` (CLAUDE.md mandate). If not, run `task ctx:local`.
+   - Verify all required services are healthy via `task status`. If anything required for the suite is down, halt with `status: blocked, reason: "test gate cannot run — services not running. Start with 'task start' and re-run."` Do NOT auto-start services; the user is responsible for the local dev environment.
+   - Run `task test:all`, piping output to `/tmp/yolo-tests-<story-key>-iter<N>.log`. Do NOT inline the full output into context.
+   - On pass: append `### 4-review-loop iter N (done, converged)` to the run log with a one-line note that the test gate passed. Exit loop, advance to stage 5.
+   - On fail: `Grep` the temp log for failing assertions / error lines and read just those spans. Treat the failures as new follow-up work for the dev-fix sub-stage. Continue to step 7.
+7. **Decide whether the test failures are in scope** (use the `test-gate` block's decision tree):
+   - Failures in code or tests this story introduced/modified → in scope. Continue to step 8.
+   - Failures in unrelated pre-existing flaky tests → STOP and escalate. Do NOT silently fix tests that aren't yours. Mark run log `status: blocked` with the failing test name(s) and the log path.
+   - Failures in test infrastructure (missing service health, environment variable, etc.) the orchestrator already tried to satisfy → STOP and escalate.
+   - Cannot diagnose from the captured log → STOP and escalate.
+8. Append the failing assertion(s) as `[Review][Patch]` follow-up tasks under the story file's `### Review Follow-ups (AI)` section. Use one bullet per failing assertion with the form `- [ ] [Review][Patch] Fix failing test: <test name> — <one-line failure summary> (see /tmp/yolo-tests-<story-key>-iter<N>.log)`. Set the story `Status:` back to `in-progress`. Commit as `bmad: <story-key>: record test gate failures as review follow-ups`.
+9. Increment `review_iters_used` in the run log. If it exceeds `max_iters`, append a `### 4-review-loop iter N (blocked, max_iters)` entry with a summary of the still-unresolved review findings AND the still-failing tests (grep them from the story file and the latest test log; do not dump them wholesale into context), mark run `status: blocked`, halt. Do NOT push half-reviewed or test-failing code.
+10. **Sub-stage 4c — Dev fix.** Re-invoke `bmad-dev-story` via the `Skill` tool with the `dev-story` prompt block's **review-continuation** directive: "this is a review continuation — address the `[Review]` follow-up tasks in the story file before any other work." The bmad-dev-story workflow already has logic for this (it detects "Senior Developer Review (AI)" section and prioritizes review follow-ups).
+11. On return, if blocked → escalate. Otherwise append the iter entry to the run log (note in the summary which sub-stage(s) ran and whether the dev fix targeted review findings, test failures, or both) and loop back to step 1.
 
-Update the run log at every iteration.
+Update the run log at every iteration. Each iteration entry should record the result of each sub-stage that ran (code review status, test gate status if it ran, dev fix outcome if it ran).
 
 ### Stage 5 — Documentation sync (always runs, inline)
 

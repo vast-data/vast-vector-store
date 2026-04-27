@@ -139,12 +139,82 @@ When following a BMAD skill's instructions inline within a yolo run, these rules
 - The run log summary should describe *how many* findings were resolved/deferred, not quote them.
 
 **Critical post-stage check:** After the skill completes, read back the story file's `Status:` line and write it to the run log. The orchestrator uses it to decide the loop:
-- `done` → review converged, exit loop, advance to stage 5
-- `in-progress` → unresolved findings remain, loop will run dev-story again (in review-continuation mode)
+- `done` → code review converged for this iteration. Advance to **Stage 4b (test gate)** below — do NOT exit the loop yet.
+- `in-progress` → unresolved findings remain. Skip 4b and go to **Stage 4c (dev fix)** which re-invokes `bmad-dev-story` in review-continuation mode.
 
 Set `next_action_hint` in the run log entry:
-- `review_converged` if Status: done
+- `review_converged_run_test_gate` if Status: done
 - `needs_dev_fix: <count> findings` if Status: in-progress
+
+---
+
+## Stage 4b — Test gate (`task test:all`)
+
+**Mission:** After code review converges (Status: done), prove the changes haven't broken anything by running the full local test suite. The test gate is part of the dev↔code-review convergence loop — failures here drive another dev-fix iteration just like unresolved review findings would, until both code review AND tests are green in the same iteration (or `max_iters` is exhausted).
+
+**Why it lives in Stage 4 and not Stage 5/6/7:** Catching broken tests *before* push and *before* CI saves a full CI cycle (and a wasted PR notification) per failure. CI is still the source of truth in Stage 7, but the local test gate gives us a fast convergence loop without round-tripping through GitHub/GitLab.
+
+**Context to have in hand before invoking:**
+- `story_key`, `story_file`, `branch`, current iteration number, `max_iters`, `review_iters_used`
+- The story file's current `Status:` (must be `done` from the just-completed Stage 4a; otherwise this stage doesn't run)
+
+**Procedure:**
+
+1. **Verify context is `local`** — CLAUDE.md mandates this before any `task test:*`, `task start*`, or `task start-backend`:
+   - Run `task ctx`. If it isn't `local`, run `task ctx:local`. If switching fails, halt and escalate (`status: blocked, reason: "could not switch to local context"`).
+2. **Verify all required services are healthy** via `task status`. The full E2E suite requires backend (port 3000), mobile (port 8081), and tablet (port 8082) — see `tests/Taskfile.yml` precondition messages. If any required service is down, halt and escalate with:
+   - `status: blocked, reason: "test gate cannot run — <list of down services>. Start with 'task start' (or the per-service start tasks) and re-run the yolo workflow."`
+   - Do NOT auto-start services. The user owns their local dev environment; auto-starting risks zombie processes, port collisions, and untracked side effects across yolo runs.
+3. **Run the full suite**: `task test:all > /tmp/yolo-tests-<story-key>-iter<N>.log 2>&1`. Capture the exit code. **Do NOT inline the full output into context** — pipe it to disk and `Grep`-slice it.
+4. **On success (exit code 0):**
+   - `Grep` the log for the final summary line(s) for each suite (e.g. `Tests:`, `passed`, `failed`) for a one-line confirmation. Do not read the whole log.
+   - Append `### 4-review-loop iter N (done, converged)` to the run log with:
+     - summary: "Code review converged (Status: done) and test gate passed (`task test:all` clean)."
+     - test_summary: a one-line aggregated count from grepped output (e.g. "API=235 Worker=48 Mobile=405 Tablet=218 E2E=N").
+     - log_path: `/tmp/yolo-tests-<story-key>-iter<N>.log`
+   - Exit Stage 4. Advance to Stage 5.
+5. **On failure (non-zero exit code):**
+   - `Grep` the temp log for failing assertions / error lines (`FAIL`, `failed`, `AssertionError`, `Error:`, etc.) and read just those spans. Do NOT inline the whole log.
+   - Apply the **decision tree** below to classify the failures.
+
+**Decision tree (matches Stage 7 ci-fix decision tree, but at the local-test layer):**
+
+- Failures in code or tests this story introduced/modified → **in scope for the dev↔CR cycle.** Append the failing assertions to the story file's `### Review Follow-ups (AI)` section as `[Review][Patch]` items, set Status back to `in-progress`, and let the orchestrator's Stage 4 loop send it to Stage 4c (`bmad-dev-story` in review-continuation mode). For genuinely missing tests on new functionality, the dev-story agent will write them as part of the fix; the QA agent (`bmad-agent-qa` / `bmad-qa-generate-e2e-tests`) is reserved for cases where bulk new test generation is needed and dev-story cannot infer scope — in practice, prefer dev-story unless the failure is "feature has no tests at all and dev-story already declined to add them."
+- Failures in CI configuration or infra files (`.github/workflows`, `.gitlab-ci.yml`, `Taskfile.yml`, etc.) — these usually only show up in Stage 7 (CI), but if the local suite fails because of a misconfigured Taskfile or env var, halt and escalate. Do NOT silently rewrite infra here; that's a different review loop.
+- Failures in unrelated pre-existing flaky tests → STOP and escalate. Do NOT "fix" tests that aren't part of this story's scope. Mark run log `status: blocked` with the failing test names and the log path.
+- Cannot diagnose the failure from the captured log → STOP and escalate.
+
+**Writing test failures into the story file (in-scope path):**
+
+When recording failures as review follow-ups (decision-tree branch 1), use this exact bullet format under `### Review Follow-ups (AI)`:
+
+```
+- [ ] [Review][Patch] Fix failing test: <suite>/<test name> — <one-line failure summary> (see /tmp/yolo-tests-<story-key>-iter<N>.log)
+```
+
+One bullet per failing assertion. Keep the summary terse — the dev-fix sub-stage will re-`Grep` the log for the specific assertion. Do NOT paste full stack traces into the story file.
+
+**Commit granularity:**
+- One `bmad: <story-key>: record test gate failures as review follow-ups` commit when Status is flipped back to `in-progress` and follow-ups are appended.
+- The dev-fix sub-stage (4c) will produce its own `code:` commits for the actual fixes.
+- On the success path, no commit is needed for the test gate itself — the convergence is recorded only in the run log entry written at iteration end.
+
+**Frugal file handling (extra emphasis — full test logs can be massive):**
+- ALWAYS pipe `task test:all` output to `/tmp/yolo-tests-<story-key>-iter<N>.log`. Never let test stdout flow into the conversation directly.
+- `Grep` the log file with `output_mode: "content"` and a tight pattern (`FAIL|AssertionError|Error:`) before any targeted `Read`.
+- For pytest-style failures, the relevant span is usually the `=== FAILURES ===` block and the per-test traceback summary. `Grep` for `FAILED` to get test names, then read 20-30 line windows around each.
+- For Jest, `Grep` for `●` and `✕` markers.
+- For Playwright, `Grep` for `Error:` and `expect(...)`.
+
+**Run log entry — set `next_action_hint`:**
+- `tests_passed_advance_to_stage_5` if exit code 0 (and this iteration is also the converged one)
+- `tests_failed_loop_to_dev_fix: <count> failures` if exit code non-zero and in-scope
+- `blocked_<reason>` if escalating
+
+**Definition of done (for this sub-stage):**
+- Exit code 0 + grepped summary written to run log → Stage 4 converged, advance to Stage 5.
+- Exit code non-zero + in-scope failures written into story file as review follow-ups + Status flipped to `in-progress` → loop continues into Stage 4c (dev fix) with `review_iters_used` incremented.
+- Out-of-scope failure or undiagnosable → halt, escalate, do not push.
 
 ---
 

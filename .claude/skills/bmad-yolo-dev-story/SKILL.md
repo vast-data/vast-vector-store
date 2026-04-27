@@ -40,7 +40,7 @@ Develops a BMAD story end-to-end without human intervention. Chains `bmad-create
 | 1 | Create story (`bmad-create-story`) — **skipped if story status ≠ `backlog`** | inline skill invocation | story key + file path written to run log |
 | 2 | Branch (`story/<key>` from default) | inline bash | branch name written to run log |
 | 3 | Dev story (`bmad-dev-story`) | inline skill invocation | files modified, status written to run log |
-| 4 | Review-fix loop (`bmad-code-review` ↔ `bmad-dev-story`, max `max_iters`) | inline per iteration | iterations, final status written to run log |
+| 4 | Review-fix loop (`bmad-code-review` ↔ test gate via `task test:all` ↔ `bmad-dev-story`, max `max_iters`) | inline per iteration | iterations, final status written to run log |
 | 5 | Documentation sync (always runs; inline edits + `bmad-agent-tech-writer` `VD`/`WD`/`MG` where useful) | inline | docs updated or skipped (with audit list) |
 | 6 | Push + open MR/PR (auto-detect `gh`/`glab`) | inline bash | remote ref + PR url |
 | 7 | CI wait + fix loop (skip if no active CI; max `max_iters` fix passes) | inline bash + inline dev-story invocation on failure | CI status |
