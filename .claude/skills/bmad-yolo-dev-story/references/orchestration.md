@@ -235,7 +235,8 @@ Append a `### 7-ci iter N (...)` entry per iteration.
 ### Stage 8 — Final report (inline)
 
 - Mark run log `status: done`.
-- Commit the final run log update as `bmad: <story-key>: complete yolo run`.
+- Update `{implementation_artifacts}/sprint-status.yaml`: set the story's status to `done` under `development_status`.
+- Commit both the run log and sprint-status update together as `bmad: <story-key>: complete yolo run`.
 - Push the final run log commit (so the PR/MR contains the full record).
 - Output a concise summary to the user: story key, branch, PR/MR URL, CI status, review iterations used, CI fix iterations used, doc updates (if any), commit count, time elapsed.
 
