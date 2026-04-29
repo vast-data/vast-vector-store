@@ -36,7 +36,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-09
-last_updated: 2026-04-19  # project-wide retrospective completed
+last_updated: 2026-04-29  # post-publication typed-column improvements logged
 project: vast-vector-store
 project_key: NOKEY
 tracking_system: file-system
@@ -72,3 +72,8 @@ development_status:
   4-2a-pre-publication-hardening: done
   4-3-migration-guide-and-pypi-publication: done
   epic-4-retrospective: done
+
+  # Epic 5: Post-Publication Improvements (driven by vast-pipelines integration learnings)
+  epic-5: in-progress
+  5-1-typed-metadata-columns-and-subclassing-ergonomics: done
+  epic-5-retrospective: optional
