@@ -549,7 +549,10 @@ class VastDBVectorStore(VectorStore):
             m_copy = dict(m)
             for col in typed_names:
                 tc = self._typed_metadata_columns[col]
-                default = tc.get_default() if tc.default_factory is not None else static_defaults[col]
+                if tc.default_factory is not None:
+                    default = tc.get_default()
+                else:
+                    default = static_defaults[col]
                 result[col].append(m_copy.pop(col, default))
             json_blobs.append(json.dumps(m_copy))
 
@@ -825,7 +828,9 @@ class VastDBVectorStore(VectorStore):
         """
         columns = self._select_columns()
         with self._ensure_tx(tx) as active_tx:
-            return self._do_vector_search(active_tx, query_vector, k, columns, predicate, filter_dict)
+            return self._do_vector_search(
+                active_tx, query_vector, k, columns, predicate, filter_dict
+            )
 
     def _do_vector_search(
         self,

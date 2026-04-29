@@ -1144,7 +1144,10 @@ def test_dict_typed_columns_include_in_metadata_true_merged(dict_typed_store):
 
 def test_dict_typed_columns_select_columns_auto_derived(dict_typed_store):
     cols = dict_typed_store._select_columns()
-    assert cols == ["id", "text", "chunk_id", "agent_id", "status", "created_at", "updated_at", "metadata"]
+    assert cols == [
+        "id", "text", "chunk_id", "agent_id", "status",
+        "created_at", "updated_at", "metadata",
+    ]
 
 
 def test_dict_typed_columns_used_by_insert_vectors(
