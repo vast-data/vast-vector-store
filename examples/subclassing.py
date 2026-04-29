@@ -49,7 +49,7 @@ BUCKET = os.environ.get("VASTDB__BUCKET", "example-bucket")
 #      - _typed_metadata_columns: names of fields to promote
 #
 #    The base class automatically derives _select_columns,
-#    _metadata_columns, and _row_to_document from this declaration.
+#    _build_metadata_columns, and _row_to_document from this declaration.
 #    Extra metadata fields (not listed) are preserved in the JSON column.
 # ---------------------------------------------------------------------------
 

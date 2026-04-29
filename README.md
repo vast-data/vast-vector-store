@@ -263,7 +263,8 @@ full LangChain interface.
 | Hook | Purpose | Returns |
 |------|---------|---------|
 | `_insert_vectors` | Customize record insertion | `list[str]` (IDs) |
-| `_metadata_columns` | Customize column layout for metadata | `dict[str, list]` |
+| `_build_metadata_columns` | Customize column layout for metadata | `dict[str, list]` |
+| `_select_columns` | Customize columns retrieved during search | `list[str]` |
 | `_vector_search` | Customize similarity search | `list[tuple[dict, float]]` |
 | `_delete_by_ids` | Customize document deletion | `bool` |
 | `_get_by_ids` | Customize document retrieval | `list[dict]` |

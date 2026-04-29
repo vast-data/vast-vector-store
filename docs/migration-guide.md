@@ -42,7 +42,7 @@ only overrides the **hook methods** that customize storage behavior.
 | LangChain interface method | VastDBVectorStore hook to override | What the hook does |
 |---|---|---|
 | `add_texts()` / `add_documents()` | `_insert_vectors()` | Build and insert a PyArrow RecordBatch |
-| *(metadata layout)* | `_metadata_columns()` | Define column layout for metadata storage |
+| *(metadata layout)* | `_build_metadata_columns()` | Define column layout for metadata storage |
 | `similarity_search()` / `similarity_search_by_vector()` | `_vector_search()` | Execute the vector similarity query |
 | `delete()` | `_delete_by_ids()` | Delete rows by document ID |
 | `get_by_ids()` | `_get_by_ids()` | Retrieve rows by document ID |
