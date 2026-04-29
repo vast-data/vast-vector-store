@@ -72,4 +72,11 @@ This story bundles the post-publication improvements that addressed those issues
 
 ### Review Findings
 
-_Pending — to be populated by `bmad-code-review` run on branch `epic-5/post-publication-improvements`._
+- [x] [Review][Decision] `addopts = "-n auto"` applies xdist globally to all tests — kept as-is per user decision
+- [x] [Review][Patch] `_row_to_document` drops falsy metadata values (0, False, 0.0) — `if val:` should be `if val is not None and val != ""` [vectorstores.py:1096]
+- [x] [Review][Patch] No validation of typed column names against core column names — a typed column named "id"/"text"/"vector"/"metadata" causes silent data corruption [vectorstores.py:114]
+- [x] [Review][Patch] README hook table uses stale `_metadata_columns` — should be `_build_metadata_columns` [README.md:266]
+- [x] [Review][Patch] Migration guide uses stale `_metadata_columns()` — should be `_build_metadata_columns()` [migration-guide.md:45]
+- [x] [Review][Patch] Example comment references stale `_metadata_columns` — should be `_build_metadata_columns` [subclassing.py:52]
+- [x] [Review][Patch] README hook table missing `_select_columns` entry — class docstring lists 7 hooks, table shows 6 [README.md:263]
+- [x] [Review][Patch] Missing blank line between TypedColumn class and module-level code — PEP 8 two-blank-line rule [vectorstores.py:58]

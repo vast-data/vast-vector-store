@@ -36,7 +36,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-09
-last_updated: 2026-04-29  # post-publication typed-column improvements logged
+last_updated: 2026-04-29  # story 5-1 review findings resolved, marked done
 project: vast-vector-store
 project_key: NOKEY
 tracking_system: file-system
