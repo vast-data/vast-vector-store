@@ -56,6 +56,7 @@ class TypedColumn:
             return self.default_factory()
         return self.default
 
+
 # Lazy-cached ADBC dbapi module (DF-f: avoid per-call import overhead).
 _adbc_dbapi: types.ModuleType | None = None
 
@@ -177,6 +178,13 @@ class VastDBVectorStore(VectorStore):
         self._table_ref = TableRef(bucket=bucket, schema=schema, table=table_name)
         self._table_metadata = TableMetadata(ref=self._table_ref)
         self._metadata_loaded = False
+
+        core_columns = {id_column, text_column, vector_column, metadata_column}
+        conflicts = core_columns & set(self._typed_metadata_columns)
+        if conflicts:
+            raise ValueError(
+                f"Typed column names conflict with core columns: {sorted(conflicts)}"
+            )
 
     @classmethod
     def from_connection_params(
@@ -1093,7 +1101,7 @@ class VastDBVectorStore(VectorStore):
         for col, tc in self._typed_metadata_columns.items():
             if tc.include_in_metadata and col not in metadata:
                 val = row.get(col)
-                if val:
+                if val is not None and val != "":
                     metadata[col] = val
         doc_id = row.get(self._id_column)
         return Document(page_content=page_content, metadata=metadata, id=doc_id)
