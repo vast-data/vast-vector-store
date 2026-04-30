@@ -18,7 +18,13 @@ When following a BMAD skill's instructions inline within a yolo run, these rules
 1. **Autonomous defaults at every halt.** The BMAD skill will instruct you to HALT and ask the user to choose options. You choose the most autonomous option in every case. Stage-specific overrides below are authoritative — follow them exactly. For any halt not covered there, use this hierarchy:
    - (a) If the choice is "apply automatically vs leave as action items vs walk through" → ALWAYS pick "apply automatically" / "batch-apply all".
    - (b) If the choice is "what would you like to do next" at the end of a workflow → treat the workflow as complete and move on.
-   - (c) If the choice asks for clarification on requirements that are genuinely ambiguous and you cannot infer the answer from existing project artifacts → STOP and escalate (see rule 4).
+   - (c) If the choice asks for clarification on requirements that are genuinely ambiguous and you cannot infer the answer from existing project artifacts → either ask via `AskUserQuestion` if the answer would change the work and you are at/near a stage boundary (see rule 1a below), otherwise STOP and escalate (see rule 4).
+
+   1a. **Asking via `AskUserQuestion` (Claude Code only).** When a clarifying question would meaningfully change the output — and only then — you may use the `AskUserQuestion` tool. Constraints:
+      - **Claude Code only.** On opencode, Cursor, or any harness without a structured-question tool, skip this entirely and fall back to autonomous defaults or rule 4 escalation. Do NOT ask via plain assistant text.
+      - **Batch at gates.** Strongly prefer collecting questions and asking them in a single `AskUserQuestion` call at natural boundaries — before stage 1 (create-story) and before stage 3 (dev-story implementation) are the canonical gates. Asking mid-stage is allowed but should be rare.
+      - **High bar.** Ask only if the answer changes what gets built or how. Do not ask to confirm autonomous decisions, validate progress, or hedge. When unsure, do not ask — proceed and record the assumption in the run log.
+      - **Not a substitute for escalation.** Genuine blockers (rejected push, repeated test failures, missing deps) still go through rule 4 — `AskUserQuestion` is for forward-looking clarification, not for handing over a broken run.
 
 2. **Commit discipline — incremental, granular, family-separated.** Commit as you go, not at the end. After each logically coherent change (one task complete, one bug fixed, one section of docs written), make a commit. Three commit families, NEVER mixed in the same commit:
    - `code: <story-key>: <imperative summary>` — for source/tests/configs/build files
