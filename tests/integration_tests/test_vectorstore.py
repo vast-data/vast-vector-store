@@ -2,6 +2,7 @@
 
 import os
 import uuid
+import warnings
 from collections.abc import Generator
 from typing import Any
 
@@ -108,6 +109,14 @@ def _build_vectorstore(session: Any, schema: str) -> Generator[VectorStore, None
 
     adbc_driver_path = os.environ.get("VASTDB__ADBC_DRIVER_PATH")
     adbc_endpoint = os.environ.get("VASTDB__ADBC_ENDPOINT")
+    if not adbc_driver_path or not adbc_endpoint:
+        warnings.warn(
+            "VASTDB__ADBC_DRIVER_PATH / VASTDB__ADBC_ENDPOINT not set; "
+            "tests will use the in-memory fallback (VASTDB_ALLOW_FALLBACK=1). "
+            "Set ADBC env vars for production-representative test runs.",
+            stacklevel=2,
+        )
+        os.environ.setdefault("VASTDB_ALLOW_FALLBACK", "1")
 
     with session.transaction() as tx:
         tx.bucket(bucket).schema(schema).create_table(table_name, _ARROW_SCHEMA)

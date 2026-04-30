@@ -953,14 +953,18 @@ def test_adbc_column_identifiers_are_quoted_in_sql(
 # --- AC4: warning log emission ---
 
 
-def test_fallback_warns_on_dimension_mismatch(vectorstore, mock_transaction, caplog):
+def test_fallback_warns_on_dimension_mismatch(vectorstore, mock_transaction, caplog, monkeypatch):
     """AC4: in-memory fallback emits a WARNING with the count of skipped rows."""
+    monkeypatch.setenv("VASTDB_ALLOW_FALLBACK", "1")
     mock_table = mock_transaction.table_from_metadata.return_value
+    mock_stats = MagicMock()
+    mock_stats.num_rows = 3
+    mock_table.stats = mock_stats
     reader = MagicMock()
     reader.read_all.return_value.to_pylist.return_value = [
-        {"id": "a", "vector": [0.1, 0.2, 0.3]},
-        {"id": "b", "vector": [0.1, 0.2]},   # wrong dim
-        {"id": "c", "vector": None},          # missing
+        {"id": "a", "embedding": [0.1, 0.2, 0.3]},
+        {"id": "b", "embedding": [0.1, 0.2]},   # wrong dim
+        {"id": "c", "embedding": None},          # missing
     ]
     mock_table.select.return_value = reader
 
@@ -999,10 +1003,11 @@ def test_adbc_step1_warns_on_duplicate_ids(adbc_vectorstore, mock_transaction, c
 
 
 def test_vector_search_warns_and_falls_back_on_step2_sdk_failure(
-    adbc_vectorstore, mock_transaction, caplog
+    adbc_vectorstore, mock_transaction, caplog, monkeypatch
 ):
     """AC4 / DF-a: a non-ADBC exception from step-2 (`_get_by_ids`) triggers a
-    WARNING and the in-memory fallback path."""
+    WARNING and the in-memory fallback path when VASTDB_ALLOW_FALLBACK is set."""
+    monkeypatch.setenv("VASTDB_ALLOW_FALLBACK", "1")
     mock_dbapi = MagicMock()
     cm = mock_dbapi.connect.return_value.__enter__.return_value
     mock_cursor = cm.cursor.return_value.__enter__.return_value
@@ -1177,4 +1182,57 @@ def test_dict_typed_columns_used_by_insert_vectors(
     assert batch.column("status").to_pylist() == ["completed"]
     stored = json.loads(batch.column("metadata").to_pylist()[0])
     assert stored == {"model_used": "test"}
+
+
+# --- Fallback gating via VASTDB_ALLOW_FALLBACK ---
+
+
+def test_vector_search_raises_when_adbc_not_configured_and_fallback_disabled(
+    vectorstore, mock_transaction
+):
+    """Vector search raises RuntimeError when ADBC is not configured and fallback is off."""
+    with pytest.raises(RuntimeError, match="ADBC is not configured"):
+        vectorstore._do_vector_search(
+            mock_transaction, [0.1, 0.2, 0.3], k=4,
+            columns=["id"], predicate=None, filter_dict=None,
+        )
+
+
+def test_vector_search_step2_failure_raises_when_fallback_disabled(
+    adbc_vectorstore, mock_transaction
+):
+    """Step-2 SDK failures propagate when VASTDB_ALLOW_FALLBACK is not set."""
+    mock_dbapi = MagicMock()
+    cm = mock_dbapi.connect.return_value.__enter__.return_value
+    mock_cursor = cm.cursor.return_value.__enter__.return_value
+    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
+        "id": ["a"],
+        "distance": [0.1],
+    }
+
+    with patch(
+        "langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi
+    ), patch.object(
+        adbc_vectorstore, "_get_by_ids", side_effect=RuntimeError("boom")
+    ):
+        with pytest.raises(RuntimeError, match="boom"):
+            adbc_vectorstore._vector_search(
+                [0.1, 0.2, 0.3], k=4, predicate=None, filter_dict=None,
+            )
+
+
+def test_fallback_raises_when_table_exceeds_max_rows(
+    vectorstore, mock_transaction, monkeypatch
+):
+    """Fallback refuses to run when row count exceeds _FALLBACK_MAX_ROWS."""
+    monkeypatch.setenv("VASTDB_ALLOW_FALLBACK", "1")
+    mock_table = mock_transaction.table_from_metadata.return_value
+    mock_stats = MagicMock()
+    mock_stats.num_rows = 1001
+    mock_table.stats = mock_stats
+
+    with pytest.raises(RuntimeError, match="table has 1001 rows"):
+        vectorstore._do_vector_search_fallback(
+            mock_transaction, [0.0, 0.0, 0.0], k=4, columns=["id"], predicate=None,
+        )
 

@@ -33,6 +33,11 @@ from langchain_vastdb import TypedColumn, VastDBVectorStore
 # ---------------------------------------------------------------------------
 load_dotenv()
 
+# Enable in-memory fallback for examples that don't configure ADBC.
+if not os.environ.get("VASTDB__ADBC_DRIVER_PATH"):
+    os.environ.setdefault("VASTDB_ALLOW_FALLBACK", "1")
+    print("NOTE: ADBC not configured; using in-memory fallback (dev only).")
+
 # ---------------------------------------------------------------------------
 # 1. Connection setup.
 # ---------------------------------------------------------------------------

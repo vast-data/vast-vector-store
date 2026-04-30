@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import types
 import uuid
 from collections import Counter
@@ -60,6 +61,8 @@ class TypedColumn:
 # Lazy-cached ADBC dbapi module (DF-f: avoid per-call import overhead).
 _adbc_dbapi: types.ModuleType | None = None
 
+_FALLBACK_MAX_ROWS = 1000
+
 
 def _get_adbc_dbapi() -> types.ModuleType:
     """Return the cached ``adbc_driver_manager.dbapi`` module, importing on first call."""
@@ -69,6 +72,11 @@ def _get_adbc_dbapi() -> types.ModuleType:
 
         _adbc_dbapi = dbapi
     return _adbc_dbapi
+
+
+def _fallback_allowed() -> bool:
+    """Return True when the VASTDB_ALLOW_FALLBACK env var is set to a truthy value."""
+    return os.environ.get("VASTDB_ALLOW_FALLBACK", "").lower() in ("1", "true", "yes")
 
 
 class VastDBVectorStore(VectorStore):
@@ -148,8 +156,9 @@ class VastDBVectorStore(VectorStore):
             adbc_driver_path: Path to ``libadbc_driver_vastdb.so``. When set
                 together with ``adbc_endpoint``, ``access_key``, and
                 ``secret_key``, enables native ADBC vector search via
-                ``array_distance()`` SQL (no vector index required). Falls back
-                to in-memory L2Sq scan when ADBC is unavailable or fails.
+                ``array_distance()`` SQL (no vector index required). When ADBC
+                is not configured, vector search raises ``RuntimeError`` unless
+                the ``VASTDB_ALLOW_FALLBACK`` env var is set (development only).
             adbc_endpoint: ADBC/QueryEngine endpoint (hostname or IP), e.g.
                 ``"172.27.74.17"`` or ``"query-engine.platform.svc.cluster.local"``.
                 This is separate from the HTTP REST endpoint.
@@ -831,9 +840,9 @@ class VastDBVectorStore(VectorStore):
     ) -> list[tuple[dict, float]]:
         """Execute the vector search within a transaction.
 
-        Tries ADBC ``array_distance()`` SQL first (no vector index required).
-        Falls back to an in-memory L2Sq scan when ADBC is not configured or
-        any ADBC error occurs.
+        Uses ADBC ``array_distance()`` SQL when configured. Falls back to an
+        in-memory L2Sq scan only when ADBC is unavailable/fails AND the
+        ``VASTDB_ALLOW_FALLBACK`` env var is set to a truthy value.
 
         Args:
             tx: An active transaction.
@@ -845,6 +854,9 @@ class VastDBVectorStore(VectorStore):
 
         Returns:
             List of (row_dict, distance_score) tuples.
+
+        Raises:
+            RuntimeError: If ADBC is not configured and fallback is not allowed.
         """
         if self._adbc_available():
             from vastdb.transaction import NoAdbcConnectionError
@@ -864,25 +876,32 @@ class VastDBVectorStore(VectorStore):
             try:
                 return self._do_vector_search_adbc(tx, query_vector, k, filter_dict)
             except (TypeError, ValueError):
-                # AC3 input-validation errors (bad filter type, disallowed
-                # column, etc.) are caller bugs and must propagate, not be
-                # masked by the in-memory fallback.
                 raise
             except adbc_exc_types as exc:
+                if not _fallback_allowed():
+                    raise
                 _logger.warning(
                     "ADBC vector search failed (%s: %s); falling back to in-memory L2Sq scan.",
                     type(exc).__name__,
                     exc,
                 )
             except Exception as exc:
-                # DF-a: step-2 SDK failure (_get_by_ids) propagates a non-ADBC
-                # exception. Fall back rather than crashing the search.
+                if not _fallback_allowed():
+                    raise
                 _logger.warning(
                     "ADBC vector search step-2 SDK call failed (%s: %s); "
                     "falling back to in-memory L2Sq scan.",
                     type(exc).__name__,
                     exc,
                 )
+        elif not _fallback_allowed():
+            raise RuntimeError(
+                "ADBC is not configured. Vector search requires a Query Engine "
+                "(ADBC) connection. Provide adbc_driver_path, adbc_endpoint, "
+                "access_key, and secret_key to enable vector search. "
+                "Alternatively, set VASTDB_ALLOW_FALLBACK=1 for small-table "
+                "in-memory search (development/testing only)."
+            )
         return self._do_vector_search_fallback(tx, query_vector, k, columns, predicate)
 
     def _do_vector_search_adbc(
@@ -1022,8 +1041,19 @@ class VastDBVectorStore(VectorStore):
         Reads id + vector columns, ranks by L2-squared distance (lower=better,
         matching the native path's ``$distance`` semantics), then fetches full
         rows for the top-k hits.
+
+        Only available when ``VASTDB_ALLOW_FALLBACK=1`` is set. Raises
+        RuntimeError if the table exceeds ``_FALLBACK_MAX_ROWS`` rows.
         """
         table = self._get_table(tx)
+        if table.stats is None:
+            table.reload_stats()
+        if table.stats and table.stats.num_rows > _FALLBACK_MAX_ROWS:
+            raise RuntimeError(
+                f"In-memory fallback search refused: table has {table.stats.num_rows} rows "
+                f"(limit is {_FALLBACK_MAX_ROWS}). Configure ADBC (Query Engine) "
+                f"for production workloads."
+            )
         scan_columns = [self._id_column, self._vector_column]
         reader = table.select(predicate=predicate, columns=scan_columns)
         all_rows = reader.read_all().to_pylist()
