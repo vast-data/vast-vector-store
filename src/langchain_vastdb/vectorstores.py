@@ -126,7 +126,7 @@ class VastDBVectorStore(VectorStore):
         table_name: str,
         id_column: str = "id",
         text_column: str = "text",
-        vector_column: str = "vector",
+        vector_column: str = "embedding",
         metadata_column: str = "metadata",
         adbc_driver_path: str | None = None,
         adbc_endpoint: str | None = None,
@@ -143,7 +143,7 @@ class VastDBVectorStore(VectorStore):
             table_name: The table name to use for vector operations.
             id_column: Column name for document IDs. Defaults to ``"id"``.
             text_column: Column name for document text. Defaults to ``"text"``.
-            vector_column: Column name for embedding vectors. Defaults to ``"vector"``.
+            vector_column: Column name for embedding vectors. Defaults to ``"embedding"``.
             metadata_column: Column name for document metadata. Defaults to ``"metadata"``.
             adbc_driver_path: Path to ``libadbc_driver_vastdb.so``. When set
                 together with ``adbc_endpoint``, ``access_key``, and

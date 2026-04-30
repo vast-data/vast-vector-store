@@ -44,7 +44,7 @@ _ARROW_SCHEMA = pa.schema([
     pa.field("id", pa.string()),
     pa.field("text", pa.string()),
     pa.field(
-        "vector",
+        "embedding",
         pa.list_(pa.field("item", pa.float32(), nullable=False), list_size=VECTOR_DIM),
     ),
     pa.field("metadata", pa.string()),
@@ -186,7 +186,7 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
             {
                 "id": ["test-null-meta"],
                 "text": ["test text"],
-                "vector": [[0.0] * VECTOR_DIM],
+                "embedding": [[0.0] * VECTOR_DIM],
                 "metadata": pa.array([None], type=pa.string()),
             },
             schema=_ARROW_SCHEMA,

@@ -80,7 +80,7 @@ TABLE_SCHEMA = pa.schema(
         pa.field("id", pa.string()),
         pa.field("text", pa.string()),
         pa.field(
-            "vector",
+            "embedding",
             pa.list_(
                 pa.field("item", pa.float32(), nullable=False), VECTOR_DIM
             ),

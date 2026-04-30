@@ -986,8 +986,8 @@ def test_adbc_step1_warns_on_duplicate_ids(adbc_vectorstore, mock_transaction, c
     }
     # Step-2 returns matching rows; we only care about the warning here.
     with patch.object(adbc_vectorstore, "_get_by_ids", return_value=[
-        {"id": "x", "text": "t", "metadata": "{}", "vector": [0.0, 0.0, 0.0]},
-        {"id": "y", "text": "t", "metadata": "{}", "vector": [0.0, 0.0, 0.0]},
+        {"id": "x", "text": "t", "metadata": "{}", "embedding": [0.0, 0.0, 0.0]},
+        {"id": "y", "text": "t", "metadata": "{}", "embedding": [0.0, 0.0, 0.0]},
     ]), patch(
         "langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi
     ), caplog.at_level(logging.WARNING, logger="langchain_vastdb.vectorstores"):
