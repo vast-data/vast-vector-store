@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import time
 import types
 import uuid
 from collections import Counter
@@ -77,6 +78,18 @@ def _get_adbc_dbapi() -> types.ModuleType:
 def _fallback_allowed() -> bool:
     """Return True when the VASTDB_ALLOW_FALLBACK env var is set to a truthy value."""
     return os.environ.get("VASTDB_ALLOW_FALLBACK", "").lower() in ("1", "true", "yes")
+
+
+def _generate_sortable_id() -> str:
+    """Generate a time-sortable UUID (v7 layout) for optimal VastDB sorted-key performance."""
+    timestamp_ms = int(time.time() * 1000)
+    time_bytes = timestamp_ms.to_bytes(6, "big")
+    rand_bytes = os.urandom(10)
+    raw = bytearray(time_bytes + rand_bytes)
+    # Set version 7 and RFC 9562 variant bits.
+    raw[6] = (raw[6] & 0x0F) | 0x70
+    raw[8] = (raw[8] & 0x3F) | 0x80
+    return str(uuid.UUID(bytes=bytes(raw)))
 
 
 class VastDBVectorStore(VectorStore):
@@ -424,11 +437,11 @@ class VastDBVectorStore(VectorStore):
             )
         ids_provided = ids is not None
         if ids is None:
-            ids = [str(uuid.uuid4()) for _ in texts_list]
+            ids = [_generate_sortable_id() for _ in texts_list]
         else:
             # Replace per-element None with generated UUIDs (e.g. when
             # Document.id is None for some documents but not others).
-            ids = [id_ if id_ is not None else str(uuid.uuid4()) for id_ in ids]
+            ids = [id_ if id_ is not None else _generate_sortable_id() for id_ in ids]
         if ids_provided:
             empties = [
                 i for i, id_ in enumerate(ids)
