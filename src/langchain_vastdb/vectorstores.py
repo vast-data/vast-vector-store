@@ -279,6 +279,54 @@ class VastDBVectorStore(VectorStore):
             **kwargs,
         )
 
+    @staticmethod
+    def create_table(
+        session: vastdb.Session,
+        bucket: str,
+        schema: str,
+        table_name: str,
+        vector_dim: int,
+        *,
+        id_column: str = "id",
+        text_column: str = "text",
+        vector_column: str = "embedding",
+        metadata_column: str = "metadata",
+        extra_columns: list[pa.Field] | None = None,
+    ) -> None:
+        """Create a VastDB table with the expected schema for this vector store.
+
+        Convenience helper for bootstrap/setup scripts. Does not make table
+        creation implicit in the constructor — callers must invoke this
+        explicitly before constructing a store against a new table.
+
+        Args:
+            session: An active ``vastdb.Session``.
+            bucket: The VAST bucket name.
+            schema: The schema name within the bucket.
+            table_name: The table name to create.
+            vector_dim: Dimensionality of the embedding vectors.
+            id_column: Column name for document IDs.
+            text_column: Column name for document text.
+            vector_column: Column name for embedding vectors.
+            metadata_column: Column name for document metadata.
+            extra_columns: Optional additional ``pa.Field`` entries appended
+                to the schema (e.g., typed metadata columns).
+        """
+        fields = [
+            pa.field(id_column, pa.string()),
+            pa.field(text_column, pa.string()),
+            pa.field(
+                vector_column,
+                pa.list_(pa.field("item", pa.float32(), nullable=False), vector_dim),
+            ),
+            pa.field(metadata_column, pa.string()),
+        ]
+        if extra_columns:
+            fields.extend(extra_columns)
+        table_schema = pa.schema(fields)
+        with session.transaction() as tx:
+            tx.bucket(bucket).schema(schema).create_table(table_name, table_schema)
+
     @classmethod
     def from_texts(
         cls,
