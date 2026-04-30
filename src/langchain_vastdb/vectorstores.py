@@ -227,6 +227,7 @@ class VastDBVectorStore(VectorStore):
         adbc_driver_path: str | None = None,
         adbc_endpoint: str | None = None,
         ssl_verify: bool = True,
+        session: vastdb.Session | None = None,
         **kwargs: Any,
     ) -> Self:
         """Create a VastDBVectorStore from VAST connection parameters.
@@ -249,18 +250,22 @@ class VastDBVectorStore(VectorStore):
                 the HTTP endpoint).
             ssl_verify: Whether to verify SSL certificates. Set to ``False``
                 for self-signed certificates. Defaults to ``True``.
+            session: Optional pre-built ``vastdb.Session``. When provided,
+                reused instead of opening a fresh connection — useful for
+                sharing a session across multiple stores.
             **kwargs: Additional keyword arguments forwarded to ``__init__``
                 (e.g., custom column names).
 
         Returns:
             A configured ``VastDBVectorStore`` instance.
         """
-        session = vastdb.connect(
-            endpoint=endpoint,
-            access=access_key,
-            secret=secret_key,
-            ssl_verify=ssl_verify,
-        )
+        if session is None:
+            session = vastdb.connect(
+                endpoint=endpoint,
+                access=access_key,
+                secret=secret_key,
+                ssl_verify=ssl_verify,
+            )
         return cls(
             embedding=embedding,
             session=session,
