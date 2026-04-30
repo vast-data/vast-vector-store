@@ -153,6 +153,7 @@ class VastDBVectorStore(VectorStore):
         adbc_endpoint: str | None = None,
         access_key: str | None = None,
         secret_key: str | None = None,
+        distance_metric: str | None = None,
     ) -> None:
         """Initialize VastDBVectorStore with a pre-built session.
 
@@ -183,6 +184,10 @@ class VastDBVectorStore(VectorStore):
             secret_key: S3-style secret key for the ADBC connection. Required
                 when ``adbc_driver_path`` is set. **Retained as an instance
                 attribute** — same caveat as ``access_key``.
+            distance_metric: Distance metric to use when the cluster does not
+                return vector index metadata (e.g. ``"l2sq"``, ``"cosine"``,
+                ``"ip"``). When ``None`` and metadata is missing, raises
+                ``ValueError`` instead of silently guessing.
         """
         self._embedding = embedding
         self._session = session
@@ -196,6 +201,7 @@ class VastDBVectorStore(VectorStore):
         self._adbc_endpoint = adbc_endpoint
         self._access_key = access_key
         self._secret_key = secret_key
+        self._distance_metric = distance_metric
 
         self._table_ref = TableRef(bucket=bucket, schema=schema, table=table_name)
         self._table_metadata = TableMetadata(ref=self._table_ref)
@@ -333,23 +339,17 @@ class VastDBVectorStore(VectorStore):
         """
         if not self._metadata_loaded:
             self._table_metadata.load(tx)
-            # Some cluster versions do not return vector index metadata in table
-            # stats. Fall back to constructing VectorIndex from known column config
-            # so that table.vector_search() can proceed (uses array_distance SQL).
-            # WARNING: the distance metric is hardcoded to l2sq — if the real
-            # index uses a different metric (cosine, ip), search results will
-            # be silently wrong.
             if self._table_metadata._vector_index is None:
-                _logger.warning(
-                    "VastDB cluster returned no vector index metadata for table "
-                    "%s; falling back to hardcoded l2sq VectorIndex. Search "
-                    "results will be incorrect if the table is actually "
-                    "indexed with a different distance metric.",
-                    self._table_ref,
-                )
+                if self._distance_metric is None:
+                    raise ValueError(
+                        f"VastDB cluster returned no vector index metadata for "
+                        f"table {self._table_ref}. Pass distance_metric= to the "
+                        f"constructor (e.g. 'l2sq', 'cosine', 'ip') to specify "
+                        f"the metric explicitly."
+                    )
                 self._table_metadata._vector_index = VectorIndex(
                     column=self._vector_column,
-                    distance_metric="l2sq",
+                    distance_metric=self._distance_metric,
                     sql_distance_function="array_distance",
                 )
             self._metadata_loaded = True

@@ -131,6 +131,7 @@ def _build_vectorstore(session: Any, schema: str) -> Generator[VectorStore, None
         adbc_endpoint=adbc_endpoint,
         access_key=access_key,
         secret_key=secret_key,
+        distance_metric="l2sq",
     )
     try:
         yield store
