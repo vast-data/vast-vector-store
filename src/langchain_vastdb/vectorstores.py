@@ -531,33 +531,21 @@ class VastDBVectorStore(VectorStore):
             Dict mapping column names to lists of per-row values.
             Each list must have the same length as *metadatas*.
         """
-        if not (typed_names := self._typed_column_names()):
+        if not self._typed_metadata_columns:
             return {self._metadata_column: [json.dumps(m) for m in metadatas]}
 
-        # Precompute defaults once — static defaults are constant across rows;
-        # default_factory columns still call get_default() per row below.
-        static_defaults = {
-            col: self._typed_metadata_columns[col].default
-            for col in typed_names
-            if self._typed_metadata_columns[col].default_factory is None
-        }
-
-        result: dict[str, list] = {col: [] for col in typed_names}
+        result: dict[str, list] = {col: [] for col in self._typed_metadata_columns}
         json_blobs: list[str] = []
 
         for m in metadatas:
             m_copy = dict(m)
-            for col in typed_names:
-                tc = self._typed_metadata_columns[col]
-                if tc.default_factory is not None:
-                    default = tc.get_default()
-                else:
-                    default = static_defaults[col]
-                result[col].append(m_copy.pop(col, default))
+            for col, tc in self._typed_metadata_columns.items():
+                result[col].append(m_copy.pop(col, tc.get_default()))
             json_blobs.append(json.dumps(m_copy))
 
-        for col in typed_names:
-            tc = self._typed_metadata_columns[col]
+        # Second pass: pa.array() requires the complete list, so type coercion
+        # must happen after all rows are collected. No-op when pa_type is None.
+        for col, tc in self._typed_metadata_columns.items():
             if tc.pa_type is not None:
                 result[col] = pa.array(result[col], type=tc.pa_type)
 
