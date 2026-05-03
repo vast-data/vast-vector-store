@@ -115,3 +115,10 @@ Whole-project sweep covering code, architecture, UX, tests, and docs. Items alre
 
 - **PWR-10.** `tests/unit_tests/test_vectorstore.py` is 932 lines in one module. Works today but split-by-concern (construction, add_texts, search, adbc, hooks, row-to-doc) would improve navigation and parallelize future additions. Not urgent.
 
+## Deferred from: env var rename (cr_fixes, 2026-05-03)
+
+- **EVR-1.** `README.md` uses wrong `vastdb.connect` kwarg names (`access_key=`, `secret_key=`) in code examples (lines ~44-48, ~89-93). Correct names are `access=`, `secret=`. Pre-existing; not caused by this diff. Fix: search-replace in README.
+- **EVR-2.** Empty-string credential (`""`) in `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` silently falls through `or` in `__init__` (lines 202-203) and disables ADBC with a misleading "ADBC not configured" error. Pre-existing `_nonblank()` check in `_adbc_available()` rejects it downstream, but the error message doesn't indicate the credential was found-but-blank. Validate non-blank at construction when `adbc_driver_path` is set.
+- **EVR-3.** `from_connection_params(session=pre_built)` ADBC credential resolution path (env-read in `__init__`) has no unit test coverage. Pre-existing gap from the `session=` param added in a prior story.
+- **EVR-4.** `os.environ.setdefault("VASTDB_ALLOW_FALLBACK", "1")` in `_build_vectorstore` fixture is process-global and never restored. If integration tests ever add fallback-disabled assertions against the real env var (not the mock), they will silently fail. Pre-existing; consider `monkeypatch.setenv` or restore in `finally`.
+

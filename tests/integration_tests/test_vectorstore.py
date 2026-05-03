@@ -26,10 +26,10 @@ from langchain_vastdb import VastDBVectorStore
 # ---------------------------------------------------------------------------
 
 REQUIRED_ENV = [
-    "VASTDB__ENDPOINT",
-    "VASTDB__ACCESS_KEY",
-    "VASTDB__SECRET_KEY",
-    "VASTDB__BUCKET",
+    "AWS_S3_ENDPOINT_URL",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "VASTDB_BUCKET",
 ]
 
 _missing = [k for k in REQUIRED_ENV if not os.environ.get(k)]
@@ -64,9 +64,9 @@ def _vastdb_session():
     # it through the HTTPS endpoint (TLS issues). VastDBVectorStore opens its own
     # ADBC connection directly to adbc_endpoint (the QueryEngine IP).
     session = vastdb.connect(
-        endpoint=os.environ["VASTDB__ENDPOINT"],
-        access=os.environ["VASTDB__ACCESS_KEY"],
-        secret=os.environ["VASTDB__SECRET_KEY"],
+        endpoint=os.environ["AWS_S3_ENDPOINT_URL"],
+        access=os.environ["AWS_ACCESS_KEY_ID"],
+        secret=os.environ["AWS_SECRET_ACCESS_KEY"],
         timeout=10,
         ssl_verify=False,
         backoff_config=BackoffConfig(max_tries=2, max_time=15.0),
@@ -77,7 +77,7 @@ def _vastdb_session():
 @pytest.fixture(scope="module")
 def _vastdb_schema(_vastdb_session):
     """Single schema shared across all tests in this module; dropped on teardown."""
-    bucket = os.environ["VASTDB__BUCKET"]
+    bucket = os.environ["VASTDB_BUCKET"]
     schema = f"lc_vs_it_{uuid.uuid4().hex[:12]}"
     with _vastdb_session.transaction() as tx:
         tx.bucket(bucket).create_schema(schema)
@@ -96,22 +96,22 @@ def _build_vectorstore(session: Any, schema: str) -> Generator[VectorStore, None
     each test gets a clean slate without the cost of reconnecting or recreating the
     schema on every function.
 
-    Required env vars: VASTDB__ENDPOINT, VASTDB__ACCESS_KEY, VASTDB__SECRET_KEY,
-    VASTDB__BUCKET. Optional: VASTDB__ADBC_DRIVER_PATH + VASTDB__ADBC_ENDPOINT
+    Required env vars: AWS_S3_ENDPOINT_URL, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+    VASTDB_BUCKET. Optional: VASTDB_ADBC_DRIVER_PATH + VASTDB_ADBC_ENDPOINT
     enable native ADBC vector search via array_distance() SQL (no vector
     index required). Load env vars via your IDE's run config, `direnv`, or
     `set -a && source .env && set +a`.
     """
-    bucket = os.environ["VASTDB__BUCKET"]
-    access_key = os.environ["VASTDB__ACCESS_KEY"]
-    secret_key = os.environ["VASTDB__SECRET_KEY"]
+    bucket = os.environ["VASTDB_BUCKET"]
+    access_key = os.environ["AWS_ACCESS_KEY_ID"]
+    secret_key = os.environ["AWS_SECRET_ACCESS_KEY"]
     table_name = f"lc_vs_it_{uuid.uuid4().hex[:12]}"
 
-    adbc_driver_path = os.environ.get("VASTDB__ADBC_DRIVER_PATH")
-    adbc_endpoint = os.environ.get("VASTDB__ADBC_ENDPOINT")
+    adbc_driver_path = os.environ.get("VASTDB_ADBC_DRIVER_PATH")
+    adbc_endpoint = os.environ.get("VASTDB_ADBC_ENDPOINT")
     if not adbc_driver_path or not adbc_endpoint:
         warnings.warn(
-            "VASTDB__ADBC_DRIVER_PATH / VASTDB__ADBC_ENDPOINT not set; "
+            "VASTDB_ADBC_DRIVER_PATH / VASTDB_ADBC_ENDPOINT not set; "
             "tests will use the in-memory fallback (VASTDB_ALLOW_FALLBACK=1). "
             "Set ADBC env vars for production-representative test runs.",
             stacklevel=2,

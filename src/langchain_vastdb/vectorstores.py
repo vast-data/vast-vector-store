@@ -199,8 +199,8 @@ class VastDBVectorStore(VectorStore):
 
         self._adbc_driver_path = adbc_driver_path
         self._adbc_endpoint = adbc_endpoint
-        self._access_key = access_key
-        self._secret_key = secret_key
+        self._access_key = access_key or os.environ.get("AWS_ACCESS_KEY_ID")
+        self._secret_key = secret_key or os.environ.get("AWS_SECRET_ACCESS_KEY")
         self._distance_metric = distance_metric
 
         self._table_ref = TableRef(bucket=bucket, schema=schema, table=table_name)
@@ -218,12 +218,12 @@ class VastDBVectorStore(VectorStore):
     def from_connection_params(
         cls,
         embedding: Embeddings,
-        endpoint: str,
-        access_key: str,
-        secret_key: str,
         bucket: str,
         schema: str,
         table_name: str,
+        endpoint: str | None = None,
+        access_key: str | None = None,
+        secret_key: str | None = None,
         adbc_driver_path: str | None = None,
         adbc_endpoint: str | None = None,
         ssl_verify: bool = True,
@@ -238,12 +238,15 @@ class VastDBVectorStore(VectorStore):
 
         Args:
             embedding: The embeddings model used to generate vectors.
-            endpoint: The VAST cluster HTTP endpoint URL.
-            access_key: The access key for authentication.
-            secret_key: The secret key for authentication.
             bucket: The VAST bucket name containing the target table.
             schema: The schema name within the bucket.
             table_name: The table name to use for vector operations.
+            endpoint: The VAST cluster HTTP endpoint URL. When ``None``,
+                ``vastdb.connect`` reads ``AWS_S3_ENDPOINT_URL`` from env.
+            access_key: The access key for authentication. When ``None``,
+                ``vastdb.connect`` reads ``AWS_ACCESS_KEY_ID`` from env.
+            secret_key: The secret key for authentication. When ``None``,
+                ``vastdb.connect`` reads ``AWS_SECRET_ACCESS_KEY`` from env.
             adbc_driver_path: Optional path to ``libadbc_driver_vastdb.so``
                 for native ADBC vector search.
             adbc_endpoint: Optional ADBC/QueryEngine endpoint (separate from

@@ -31,17 +31,17 @@ from langchain_vastdb import VastDBVectorStore
 load_dotenv()
 
 # Enable in-memory fallback for examples that don't configure ADBC.
-if not os.environ.get("VASTDB__ADBC_DRIVER_PATH"):
+if not os.environ.get("VASTDB_ADBC_DRIVER_PATH"):
     os.environ.setdefault("VASTDB_ALLOW_FALLBACK", "1")
     print("NOTE: ADBC not configured; using in-memory fallback (dev only).")
 
 # ---------------------------------------------------------------------------
 # 1. Connection setup.
 # ---------------------------------------------------------------------------
-ENDPOINT = os.environ["VASTDB__ENDPOINT"]
-ACCESS_KEY = os.environ["VASTDB__ACCESS_KEY"]
-SECRET_KEY = os.environ["VASTDB__SECRET_KEY"]
-BUCKET = os.environ.get("VASTDB__BUCKET", "example-bucket")
+ENDPOINT = os.environ["AWS_S3_ENDPOINT_URL"]
+ACCESS_KEY = os.environ["AWS_ACCESS_KEY_ID"]
+SECRET_KEY = os.environ["AWS_SECRET_ACCESS_KEY"]
+BUCKET = os.environ.get("VASTDB_BUCKET", "example-bucket")
 
 # ---------------------------------------------------------------------------
 # 2. Create an isolated schema and table for this example run.
