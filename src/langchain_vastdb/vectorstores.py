@@ -395,18 +395,12 @@ class VastDBVectorStore(VectorStore):
         """
         if not self._metadata_loaded:
             self._table_metadata.load(tx)
-            if self._table_metadata._vector_index is None:
-                if self._distance_metric is None:
-                    raise ValueError(
-                        f"VastDB cluster returned no vector index metadata for "
-                        f"table {self._table_ref}. Pass distance_metric= to the "
-                        f"constructor (e.g. 'l2sq', 'cosine', 'ip') to specify "
-                        f"the metric explicitly."
-                    )
-                self._table_metadata._vector_index = VectorIndex(
-                    column=self._vector_column,
-                    distance_metric=self._distance_metric,
-                    sql_distance_function="array_distance",
+            if self._table_metadata._vector_index is None and self._distance_metric is None:
+                raise ValueError(
+                    f"VastDB cluster returned no vector index metadata for "
+                    f"table {self._table_ref}. Pass distance_metric= to the "
+                    f"constructor (e.g. 'l2sq', 'cosine', 'ip') to specify "
+                    f"the metric explicitly."
                 )
             self._metadata_loaded = True
         return tx.table_from_metadata(self._table_metadata)
