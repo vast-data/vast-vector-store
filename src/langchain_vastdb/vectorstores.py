@@ -75,6 +75,54 @@ def _get_adbc_dbapi() -> types.ModuleType:
     return _adbc_dbapi
 
 
+def _build_table_schema(
+    vector_dim: int,
+    *,
+    id_column: str = "id",
+    text_column: str = "text",
+    vector_column: str = "embedding",
+    metadata_column: str = "metadata",
+    extra_columns: list[pa.Field] | None = None,
+) -> pa.Schema:
+    """Return the PyArrow schema used for VastDB vector-store tables."""
+    fields: list[pa.Field] = [
+        pa.field(id_column, pa.string()),
+        pa.field(text_column, pa.string()),
+        pa.field(
+            vector_column,
+            pa.list_(pa.field("item", pa.float32(), nullable=False), vector_dim),
+        ),
+        pa.field(metadata_column, pa.string()),
+    ]
+    if extra_columns:
+        fields.extend(extra_columns)
+    return pa.schema(fields)
+
+
+def _check_schema_compatible(expected: pa.Schema, actual: pa.Schema) -> None:
+    """Raise ``ValueError`` if *actual* is missing or mismatches any field in *expected*.
+
+    Extra columns in *actual* are allowed — the check is one-directional.
+    """
+    mismatches: list[str] = []
+    for expected_field in expected:
+        idx = actual.get_field_index(expected_field.name)
+        if idx == -1:
+            mismatches.append(f"  missing column {expected_field.name!r}")
+        else:
+            actual_type = actual.field(idx).type
+            if actual_type != expected_field.type:
+                mismatches.append(
+                    f"  column {expected_field.name!r}: "
+                    f"expected {expected_field.type}, got {actual_type}"
+                )
+    if mismatches:
+        raise ValueError(
+            "Existing table schema is incompatible with the requested schema:\n"
+            + "\n".join(mismatches)
+        )
+
+
 def _fallback_allowed() -> bool:
     """Return True when the VASTDB_ALLOW_FALLBACK env var is set to a truthy value."""
     return os.environ.get("VASTDB_ALLOW_FALLBACK", "").lower() in ("1", "true", "yes")
@@ -141,7 +189,7 @@ class VastDBVectorStore(VectorStore):
     def __init__(
         self,
         embedding: Embeddings,
-        session: vastdb.Session,
+        session: vastdb.session.Session,
         bucket: str,
         schema: str,
         table_name: str,
@@ -154,6 +202,7 @@ class VastDBVectorStore(VectorStore):
         access_key: str | None = None,
         secret_key: str | None = None,
         distance_metric: str | None = None,
+        vector_dim: int | None = None,
     ) -> None:
         """Initialize VastDBVectorStore with a pre-built session.
 
@@ -188,6 +237,8 @@ class VastDBVectorStore(VectorStore):
                 return vector index metadata (e.g. ``"l2sq"``, ``"cosine"``,
                 ``"ip"``). When ``None`` and metadata is missing, raises
                 ``ValueError`` instead of silently guessing.
+            vector_dim: Dimensionality of the embedding vectors. Only required
+                when calling :meth:`build_table`.
         """
         self._embedding = embedding
         self._session = session
@@ -196,6 +247,7 @@ class VastDBVectorStore(VectorStore):
         self._text_column = text_column
         self._vector_column = vector_column
         self._metadata_column = metadata_column
+        self._vector_dim = vector_dim
 
         self._adbc_driver_path = adbc_driver_path
         self._adbc_endpoint = adbc_endpoint
@@ -227,12 +279,12 @@ class VastDBVectorStore(VectorStore):
         adbc_driver_path: str | None = None,
         adbc_endpoint: str | None = None,
         ssl_verify: bool = True,
-        session: vastdb.Session | None = None,
+        session: vastdb.session.Session | None = None,
         **kwargs: Any,
     ) -> Self:
         """Create a VastDBVectorStore from VAST connection parameters.
 
-        This is a convenience factory that builds a ``vastdb.Session``
+        This is a convenience factory that builds a ``vastdb.session.Session``
         internally from the provided credentials and endpoint, then
         delegates to the primary constructor.
 
@@ -253,7 +305,7 @@ class VastDBVectorStore(VectorStore):
                 the HTTP endpoint).
             ssl_verify: Whether to verify SSL certificates. Set to ``False``
                 for self-signed certificates. Defaults to ``True``.
-            session: Optional pre-built ``vastdb.Session``. When provided,
+            session: Optional pre-built ``vastdb.session.Session``. When provided,
                 reused instead of opening a fresh connection — useful for
                 sharing a session across multiple stores.
             **kwargs: Additional keyword arguments forwarded to ``__init__``
@@ -284,12 +336,12 @@ class VastDBVectorStore(VectorStore):
 
     @staticmethod
     def create_table(
-        session: vastdb.Session,
+        session: vastdb.session.Session,
         bucket: str,
-        schema: str,
-        table_name: str,
         vector_dim: int,
         *,
+        schema: str | None = None,
+        table_name: str | None = None,
         id_column: str = "id",
         text_column: str = "text",
         vector_column: str = "embedding",
@@ -303,11 +355,13 @@ class VastDBVectorStore(VectorStore):
         explicitly before constructing a store against a new table.
 
         Args:
-            session: An active ``vastdb.Session``.
+            session: An active ``vastdb.session.Session``.
             bucket: The VAST bucket name.
-            schema: The schema name within the bucket.
-            table_name: The table name to create.
             vector_dim: Dimensionality of the embedding vectors.
+            schema: The schema name within the bucket. Defaults to a
+                randomly generated name prefixed with ``"vs_"``.
+            table_name: The table name to create. Defaults to a randomly
+                generated name prefixed with ``"vs_"``.
             id_column: Column name for document IDs.
             text_column: Column name for document text.
             vector_column: Column name for embedding vectors.
@@ -315,20 +369,167 @@ class VastDBVectorStore(VectorStore):
             extra_columns: Optional additional ``pa.Field`` entries appended
                 to the schema (e.g., typed metadata columns).
         """
-        fields = [
-            pa.field(id_column, pa.string()),
-            pa.field(text_column, pa.string()),
-            pa.field(
-                vector_column,
-                pa.list_(pa.field("item", pa.float32(), nullable=False), vector_dim),
-            ),
-            pa.field(metadata_column, pa.string()),
-        ]
-        if extra_columns:
-            fields.extend(extra_columns)
-        table_schema = pa.schema(fields)
+        schema = schema or f"vs_{uuid.uuid4().hex[:12]}"
+        table_name = table_name or f"vs_{uuid.uuid4().hex[:12]}"
+        table_schema = _build_table_schema(
+            vector_dim,
+            id_column=id_column,
+            text_column=text_column,
+            vector_column=vector_column,
+            metadata_column=metadata_column,
+            extra_columns=extra_columns,
+        )
         with session.transaction() as tx:
+            tx.bucket(bucket).create_schema(schema, fail_if_exists=False)
             tx.bucket(bucket).schema(schema).create_table(table_name, table_schema)
+
+    def build_table(self, *, exist_ok: bool = False) -> None:
+        """Create the backing schema and table using this store's attributes.
+
+        Use this after constructing the store when the table does not yet exist.
+        Typed metadata columns declared on the class via
+        ``_typed_metadata_columns`` are automatically included in the schema.
+
+        Args:
+            exist_ok: When ``True``, skip creation if the table already exists
+                and verify that its schema is compatible with the requested one.
+                When ``False`` (default), raises ``vastdb.errors.TableExists``.
+
+        Raises:
+            ValueError: If ``vector_dim`` was not set at construction time, or
+                if ``exist_ok=True`` and the existing table's schema is
+                incompatible with the requested schema.
+            vastdb.errors.TableExists: If the table already exists and
+                ``exist_ok`` is ``False``.
+        """
+        if self._vector_dim is None:
+            raise ValueError(
+                "vector_dim must be provided at construction time to use build_table()"
+            )
+        extra_columns = [
+            pa.field(name, tc.pa_type if tc.pa_type is not None else pa.string())
+            for name, tc in self._typed_metadata_columns.items()
+        ] or None
+        expected_schema = _build_table_schema(
+            self._vector_dim,
+            id_column=self._id_column,
+            text_column=self._text_column,
+            vector_column=self._vector_column,
+            metadata_column=self._metadata_column,
+            extra_columns=extra_columns,
+        )
+        _table_existed = False
+        with self._session.transaction() as tx:
+            sc = tx.bucket(self._table_ref.bucket)
+            sc.create_schema(self._table_ref.schema, fail_if_exists=False)
+            try:
+                sc.schema(self._table_ref.schema).create_table(
+                    self._table_ref.table, expected_schema
+                )
+            except vastdb.errors.TableExists:
+                _table_existed = True
+                if exist_ok:
+                    existing = sc.schema(self._table_ref.schema).table(self._table_ref.table)
+                    _check_schema_compatible(expected_schema, existing.arrow_schema)
+        if _table_existed and not exist_ok:
+            raise vastdb.errors.TableExists(
+                self._table_ref.bucket, self._table_ref.schema, self._table_ref.table
+            )
+
+    @classmethod
+    def build_with_table(
+        cls,
+        embedding: Embeddings,
+        vector_dim: int,
+        *,
+        bucket: str | None = None,
+        schema: str | None = None,
+        table_name: str | None = None,
+        endpoint: str | None = None,
+        access_key: str | None = None,
+        secret_key: str | None = None,
+        adbc_driver_path: str | None = None,
+        adbc_endpoint: str | None = None,
+        ssl_verify: bool = True,
+        session: vastdb.session.Session | None = None,
+        id_column: str = "id",
+        text_column: str = "text",
+        vector_column: str = "embedding",
+        metadata_column: str = "metadata",
+        distance_metric: str | None = None,
+    ) -> "Self":
+        """Create a VastDBVectorStore and provision the backing schema and table.
+
+        Combines session construction, schema creation, table creation, and
+        store construction into a single call. Use this for first-time setup
+        when neither the schema nor the table exists yet.
+
+        Typed metadata columns declared on the subclass via
+        ``_typed_metadata_columns`` are automatically included in the table
+        schema. To add custom columns, subclass and set ``_typed_metadata_columns``.
+
+        Args:
+            embedding: The embeddings model used to generate vectors.
+            vector_dim: Dimensionality of the embedding vectors.
+            bucket: The VAST bucket name. Defaults to the ``VASTDB_BUCKET``
+                environment variable.
+            schema: The schema name to create within the bucket. Defaults to a
+                random hex string prefixed with ``"vs_"``.
+            table_name: The table name to create. Defaults to a random hex
+                string prefixed with ``"vs_"``.
+            endpoint: The VAST cluster HTTP endpoint URL.
+            access_key: The access key for authentication.
+            secret_key: The secret key for authentication.
+            adbc_driver_path: Optional path to ``libadbc_driver_vastdb.so``.
+            adbc_endpoint: Optional ADBC/QueryEngine endpoint.
+            ssl_verify: Whether to verify SSL certificates. Defaults to ``True``.
+            session: Optional pre-built ``vastdb.session.Session``.
+            id_column: Column name for document IDs. Defaults to ``"id"``.
+            text_column: Column name for document text. Defaults to ``"text"``.
+            vector_column: Column name for embedding vectors. Defaults to ``"embedding"``.
+            metadata_column: Column name for document metadata. Defaults to ``"metadata"``.
+            distance_metric: Distance metric for the store (e.g. ``"l2sq"``,
+                ``"cosine"``, ``"ip"``). Required when the cluster does not
+                return vector index metadata.
+
+        Returns:
+            A configured ``VastDBVectorStore`` instance backed by the new table.
+        """
+        bucket = bucket or os.environ.get("VASTDB_BUCKET")
+        if not bucket:
+            raise ValueError(
+                "bucket must be provided or set via the VASTDB_BUCKET environment variable"
+            )
+        schema = schema or f"vs_{uuid.uuid4().hex[:12]}"
+        table_name = table_name or f"vs_{uuid.uuid4().hex[:12]}"
+
+        if session is None:
+            session = vastdb.connect(
+                endpoint=endpoint,
+                access=access_key,
+                secret=secret_key,
+                ssl_verify=ssl_verify,
+            )
+
+        store = cls(
+            embedding=embedding,
+            session=session,
+            bucket=bucket,
+            schema=schema,
+            table_name=table_name,
+            id_column=id_column,
+            text_column=text_column,
+            vector_column=vector_column,
+            metadata_column=metadata_column,
+            adbc_driver_path=adbc_driver_path,
+            adbc_endpoint=adbc_endpoint,
+            access_key=access_key,
+            secret_key=secret_key,
+            distance_metric=distance_metric,
+            vector_dim=vector_dim,
+        )
+        store.build_table()
+        return store
 
     @classmethod
     def from_texts(
@@ -337,7 +538,7 @@ class VastDBVectorStore(VectorStore):
         embedding: Embeddings,
         metadatas: list[dict] | None = None,
         *,
-        session: vastdb.Session,
+        session: vastdb.session.Session,
         bucket: str,
         schema: str,
         table_name: str,
@@ -354,7 +555,7 @@ class VastDBVectorStore(VectorStore):
             embedding: The embeddings model used to generate vectors.
             metadatas: Optional list of metadata dicts, one per text. If
                 omitted, each document is stored with an empty metadata dict.
-            session: An active ``vastdb.Session``.
+            session: An active ``vastdb.session.Session``.
             bucket: The VAST bucket name containing the target table.
             schema: The schema name within the bucket.
             table_name: The table name to use for vector operations.

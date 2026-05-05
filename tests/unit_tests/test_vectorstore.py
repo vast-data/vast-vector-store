@@ -5,6 +5,7 @@ import logging
 import uuid
 from unittest.mock import MagicMock, patch
 
+import pyarrow as pa
 import pytest
 from langchain_core.documents import Document
 from langchain_core.embeddings import DeterministicFakeEmbedding
@@ -1243,4 +1244,378 @@ def test_fallback_raises_when_table_exceeds_max_rows(
         vectorstore._do_vector_search_fallback(
             mock_transaction, [0.0, 0.0, 0.0], k=4, columns=["id"], predicate=None,
         )
+
+
+# ---------------------------------------------------------------------------
+# build_with_table tests
+# ---------------------------------------------------------------------------
+
+
+def test_build_with_table_creates_schema_and_table(mock_session, fake_embedding):
+    """build_with_table provisions schema and table and returns the store."""
+    mock_tx, mock_schema_obj = _make_tx_mock(mock_session, table_exists=False)
+
+    with patch("langchain_vastdb.vectorstores.vastdb.connect", return_value=mock_session):
+        store = VastDBVectorStore.build_with_table(
+            embedding=fake_embedding,
+            endpoint="http://vast:8080",
+            access_key="ak",
+            secret_key="sk",
+            bucket="b",
+            schema="s",
+            table_name="t",
+            vector_dim=64,
+        )
+
+    mock_tx.bucket.return_value.create_schema.assert_called_once_with("s", fail_if_exists=False)
+    mock_schema_obj.create_table.assert_called_once()
+    assert store._session is mock_session
+
+
+def test_build_with_table_reuses_provided_session(mock_session, fake_embedding):
+    """build_with_table skips vastdb.connect when a session is passed."""
+    _make_tx_mock(mock_session, table_exists=False)
+
+    with patch("langchain_vastdb.vectorstores.vastdb.connect") as mock_connect:
+        store = VastDBVectorStore.build_with_table(
+            embedding=fake_embedding,
+            bucket="b",
+            schema="s",
+            table_name="t",
+            vector_dim=32,
+            session=mock_session,
+        )
+        mock_connect.assert_not_called()
+
+    assert store._session is mock_session
+
+
+def test_build_with_table_derives_extra_columns_from_typed_metadata(
+    mock_session, fake_embedding
+):
+    """build_with_table auto-derives extra_columns from _typed_metadata_columns."""
+    class TypedStore(VastDBVectorStore):
+        _typed_metadata_columns = {
+            "category": TypedColumn(pa_type=pa.string()),
+            "score": TypedColumn(pa_type=pa.float32()),
+        }
+
+    _, mock_schema_obj = _make_tx_mock(mock_session, table_exists=False)
+
+    with patch("langchain_vastdb.vectorstores.vastdb.connect", return_value=mock_session):
+        TypedStore.build_with_table(
+            embedding=fake_embedding,
+            endpoint="http://vast:8080",
+            access_key="ak",
+            secret_key="sk",
+            bucket="b",
+            schema="s",
+            table_name="t",
+            vector_dim=8,
+        )
+
+    _, actual_schema = mock_schema_obj.create_table.call_args[0]
+    assert actual_schema.get_field_index("category") != -1
+    assert actual_schema.field("category").type == pa.string()
+    assert actual_schema.get_field_index("score") != -1
+    assert actual_schema.field("score").type == pa.float32()
+
+
+def test_build_with_table_typed_column_without_pa_type_defaults_to_string(
+    mock_session, fake_embedding
+):
+    """TypedColumn with pa_type=None falls back to pa.string() in extra_columns."""
+    class UntypedStore(VastDBVectorStore):
+        _typed_metadata_columns = {"tag": TypedColumn()}
+
+    _, mock_schema_obj = _make_tx_mock(mock_session, table_exists=False)
+
+    with patch("langchain_vastdb.vectorstores.vastdb.connect", return_value=mock_session):
+        UntypedStore.build_with_table(
+            embedding=fake_embedding,
+            endpoint="http://vast:8080",
+            access_key="ak",
+            secret_key="sk",
+            bucket="b",
+            schema="s",
+            table_name="t",
+            vector_dim=4,
+        )
+
+    _, actual_schema = mock_schema_obj.create_table.call_args[0]
+    assert actual_schema.get_field_index("tag") != -1
+    assert actual_schema.field("tag").type == pa.string()
+
+
+
+def test_build_with_table_forwards_custom_column_names(mock_session, fake_embedding):
+    """Custom column names are stored on the returned store instance."""
+    _make_tx_mock(mock_session, table_exists=False)
+
+    with patch("langchain_vastdb.vectorstores.vastdb.connect", return_value=mock_session):
+        store = VastDBVectorStore.build_with_table(
+            embedding=fake_embedding,
+            endpoint="http://vast:8080",
+            access_key="ak",
+            secret_key="sk",
+            bucket="b",
+            schema="s",
+            table_name="t",
+            vector_dim=16,
+            id_column="my_id",
+            text_column="my_text",
+        )
+
+    assert store._id_column == "my_id"
+    assert store._text_column == "my_text"
+
+
+def test_build_with_table_defaults_bucket_schema_table(mock_session, fake_embedding, monkeypatch):
+    """bucket defaults to VASTDB_BUCKET; schema and table_name are auto-generated."""
+    monkeypatch.setenv("VASTDB_BUCKET", "env-bucket")
+    _make_tx_mock(mock_session, table_exists=False)
+
+    with patch("langchain_vastdb.vectorstores.vastdb.connect", return_value=mock_session):
+        store = VastDBVectorStore.build_with_table(
+            fake_embedding,
+            32,
+            endpoint="http://vast:8080",
+            access_key="ak",
+            secret_key="sk",
+        )
+
+    assert store._table_ref.bucket == "env-bucket"
+    assert store._table_ref.schema.startswith("vs_")
+    assert store._table_ref.table.startswith("vs_")
+
+
+def test_build_with_table_raises_without_bucket(fake_embedding):
+    """build_with_table raises ValueError when bucket is not set."""
+    import os
+    with patch.dict(os.environ, {}, clear=True):
+        os.environ.pop("VASTDB_BUCKET", None)
+        with pytest.raises(ValueError, match="bucket"):
+            VastDBVectorStore.build_with_table(fake_embedding, 32)
+
+
+# ---------------------------------------------------------------------------
+# build_table tests
+# ---------------------------------------------------------------------------
+
+
+def _make_tx_mock(mock_session, *, table_exists: bool = False, arrow_schema=None):
+    """Return a (mock_tx, mock_schema_obj) pair wired into mock_session.
+
+    When table_exists=False, schema.create_table() succeeds (no side effect).
+    When table_exists=True, schema.create_table() raises TableExists and
+    schema.table() returns a mock with arrow_schema set for the compat check.
+    """
+    import vastdb.errors
+
+    mock_tx = MagicMock()
+    mock_cm = MagicMock()
+    mock_cm.__enter__.return_value = mock_tx
+    mock_cm.__exit__.return_value = False
+    mock_session.transaction.return_value = mock_cm
+
+    mock_schema_obj = mock_tx.bucket.return_value.schema.return_value
+    if table_exists:
+        mock_schema_obj.create_table.side_effect = vastdb.errors.TableExists("b", "s", "t")
+        mock_table = MagicMock()
+        mock_table.arrow_schema = arrow_schema
+        mock_schema_obj.table.return_value = mock_table
+
+    return mock_tx, mock_schema_obj
+
+
+def test_build_table_creates_schema_and_table(mock_session, fake_embedding):
+    """build_table provisions schema and table when the table does not yet exist."""
+    mock_tx, mock_schema_obj = _make_tx_mock(mock_session, table_exists=False)
+
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+        vector_dim=64,
+    )
+    store.build_table()
+
+    mock_tx.bucket.return_value.create_schema.assert_called_once_with("s", fail_if_exists=False)
+    mock_schema_obj.create_table.assert_called_once()
+    table_name_arg, schema_arg = mock_schema_obj.create_table.call_args[0]
+    assert table_name_arg == "t"
+    assert schema_arg.field("id").type == pa.string()
+    assert schema_arg.field("embedding").type == pa.list_(
+        pa.field("item", pa.float32(), nullable=False), 64
+    )
+
+
+def test_build_table_exist_ok_compatible_schema(mock_session, fake_embedding):
+    """build_table with exist_ok=True passes when existing schema matches."""
+    compatible_schema = pa.schema([
+        pa.field("id", pa.string()),
+        pa.field("text", pa.string()),
+        pa.field("embedding", pa.list_(pa.field("item", pa.float32(), nullable=False), 32)),
+        pa.field("metadata", pa.string()),
+    ])
+    _make_tx_mock(mock_session, table_exists=True, arrow_schema=compatible_schema)
+
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+        vector_dim=32,
+    )
+    store.build_table(exist_ok=True)  # must not raise
+
+
+def test_build_table_exist_ok_incompatible_schema_raises(mock_session, fake_embedding):
+    """build_table with exist_ok=True raises ValueError on schema mismatch."""
+    incompatible_schema = pa.schema([
+        pa.field("id", pa.string()),
+        pa.field("text", pa.string()),
+        pa.field("embedding", pa.list_(pa.field("item", pa.float32(), nullable=False), 64)),
+        # metadata column missing
+    ])
+    _make_tx_mock(mock_session, table_exists=True, arrow_schema=incompatible_schema)
+
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+        vector_dim=32,
+    )
+    with pytest.raises(ValueError, match="incompatible"):
+        store.build_table(exist_ok=True)
+
+
+def test_build_table_reraises_table_exists_when_not_ok(mock_session, fake_embedding):
+    """build_table with exist_ok=False (default) raises TableExists when table is present."""
+    import vastdb.errors
+
+    _make_tx_mock(mock_session, table_exists=True)
+
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+        vector_dim=32,
+    )
+    with pytest.raises(vastdb.errors.TableExists):
+        store.build_table()
+
+
+def test_build_table_raises_without_vector_dim(mock_session, fake_embedding):
+    """build_table raises ValueError when vector_dim was not set."""
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+    )
+    with pytest.raises(ValueError, match="vector_dim"):
+        store.build_table()
+
+
+def test_build_table_derives_extra_columns_from_typed_metadata(mock_session, fake_embedding):
+    """build_table auto-derives extra_columns from _typed_metadata_columns."""
+    class TypedStore(VastDBVectorStore):
+        _typed_metadata_columns = {
+            "tag": TypedColumn(pa_type=pa.string()),
+            "score": TypedColumn(pa_type=pa.float32()),
+        }
+
+    mock_tx, mock_schema_obj = _make_tx_mock(mock_session, table_exists=False)
+
+    store = TypedStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+        vector_dim=8,
+    )
+    store.build_table()
+
+    _, schema_arg = mock_schema_obj.create_table.call_args[0]
+    assert schema_arg.get_field_index("tag") != -1
+    assert schema_arg.field("tag").type == pa.string()
+    assert schema_arg.get_field_index("score") != -1
+    assert schema_arg.field("score").type == pa.float32()
+
+
+# ---------------------------------------------------------------------------
+# _check_schema_compatible tests
+# ---------------------------------------------------------------------------
+
+from langchain_vastdb.vectorstores import _check_schema_compatible  # noqa: E402
+
+
+def test_check_schema_compatible_identical_schemas_pass():
+    schema = pa.schema([pa.field("a", pa.string()), pa.field("b", pa.int32())])
+    _check_schema_compatible(schema, schema)  # must not raise
+
+
+def test_check_schema_compatible_extra_actual_columns_allowed():
+    expected = pa.schema([pa.field("a", pa.string())])
+    actual = pa.schema([pa.field("a", pa.string()), pa.field("extra", pa.int64())])
+    _check_schema_compatible(expected, actual)  # extra column is fine
+
+
+def test_check_schema_compatible_missing_column_raises():
+    expected = pa.schema([pa.field("a", pa.string()), pa.field("b", pa.int32())])
+    actual = pa.schema([pa.field("a", pa.string())])
+    with pytest.raises(ValueError, match="missing column 'b'"):
+        _check_schema_compatible(expected, actual)
+
+
+def test_check_schema_compatible_wrong_type_raises():
+    expected = pa.schema([pa.field("a", pa.string())])
+    actual = pa.schema([pa.field("a", pa.int32())])
+    with pytest.raises(ValueError, match="column 'a'"):
+        _check_schema_compatible(expected, actual)
+
+
+def test_check_schema_compatible_multiple_mismatches_all_reported():
+    expected = pa.schema([
+        pa.field("a", pa.string()),
+        pa.field("b", pa.float32()),
+        pa.field("c", pa.int64()),
+    ])
+    actual = pa.schema([
+        pa.field("a", pa.int32()),   # wrong type
+        pa.field("b", pa.float32()), # ok
+        # "c" missing
+    ])
+    with pytest.raises(ValueError) as exc_info:
+        _check_schema_compatible(expected, actual)
+    msg = str(exc_info.value)
+    assert "column 'a'" in msg
+    assert "missing column 'c'" in msg
+    assert "column 'b'" not in msg  # b is fine — shouldn't appear
+
+
+def test_check_schema_compatible_vector_column_dim_mismatch_raises():
+    """Fixed-size list type with different vector dim must be caught."""
+    expected = pa.schema([
+        pa.field("v", pa.list_(pa.field("item", pa.float32(), nullable=False), 128)),
+    ])
+    actual = pa.schema([
+        pa.field("v", pa.list_(pa.field("item", pa.float32(), nullable=False), 64)),
+    ])
+    with pytest.raises(ValueError, match="column 'v'"):
+        _check_schema_compatible(expected, actual)
+
+
+def test_check_schema_compatible_empty_expected_always_passes():
+    _check_schema_compatible(pa.schema([]), pa.schema([pa.field("x", pa.int8())]))
 
