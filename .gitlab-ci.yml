@@ -114,21 +114,3 @@ integration-test:
   #   AWS_ACCESS_KEY_ID         — S3-style access key
   #   AWS_SECRET_ACCESS_KEY     — S3-style secret key (mark as Masked)
   #   VASTDB_BUCKET             — bucket name, e.g. "omer-test-db"
-
-# -- Publish to PyPI: only on version tags --
-# NOTE: Before first publish, register this project as a trusted publisher
-# on PyPI at https://pypi.org/manage/account/publishing/
-# Link it to this GitLab project's path, environment, and tag pattern.
-publish:
-  stage: publish
-  image: ghcr.io/astral-sh/uv:${UV_VERSION}-python${PYTHON_VERSION}-${BASE_LAYER}
-  tags:
-    - vast-dev-builder
-  id_tokens:
-    PYPI_ID_TOKEN:
-      aud: pypi
-  rules:
-    - if: $CI_COMMIT_TAG =~ /^v/
-  script:
-    - uv build
-    - uv publish --token $PYPI_ID_TOKEN
