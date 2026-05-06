@@ -107,7 +107,7 @@ integration-test:
     reports:
       junit: report.xml
   # Required CI/CD variables (Settings → CI/CD → Variables):
-  #   VASTDB_CLUSTER_ENDPOINT   — cluster host:port (tunnel target), e.g. "172.27.151.2:443"
+  #   AWS_S3_ENDPOINT_URL   — cluster host:port (tunnel target), e.g. "172.27.151.2:443"
   #   VASTDB_SSH_JUMP_HOST      — SSH jump host IP/hostname, e.g. "10.141.200.151"
   #   VASTDB_ENDPOINT_USERNAME  — SSH username on the jump host, e.g. "vastdata"
   #   VASTDB_ENDPOINT_PASSWORD  — SSH password for the jump host (mark as Masked)

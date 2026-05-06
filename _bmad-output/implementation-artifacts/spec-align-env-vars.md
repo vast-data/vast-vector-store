@@ -63,7 +63,7 @@ context: []
 - [x] `examples/filtered_search.py` -- Same renames
 - [x] `.env.template` -- Rewrite with new var names: `AWS_S3_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `VASTDB_BUCKET`, `VASTDB_ADBC_ENDPOINT`, `VASTDB_ADBC_DRIVER_PATH`
 - [x] `.gitlab-ci.yml` -- In the `export` line change `VASTDB__ENDPOINT` → `AWS_S3_ENDPOINT_URL`; update the Required CI/CD variables comment block to use new names (`AWS_*` for creds, `VASTDB_SSH_JUMP_HOST`, `VASTDB_ENDPOINT_USERNAME`, `VASTDB_ENDPOINT_PASSWORD`, `VASTDB_BUCKET`)
-- [x] `scripts/ci-tunnel.sh` -- Rename `VASTDB__ENDPOINT` → `VASTDB_CLUSTER_ENDPOINT` (the raw host:port tunnel target), `VASTDB__SSH_JUMP_HOST` → `VASTDB_SSH_JUMP_HOST`, `VASTDB__ENDPOINT_USERNAME` → `VASTDB_ENDPOINT_USERNAME`, `VASTDB__ENDPOINT_PASSWORD` → `VASTDB_ENDPOINT_PASSWORD`; update header comment; after tunnel is up the calling shell exports `AWS_S3_ENDPOINT_URL` (not `VASTDB__ENDPOINT`)
+- [x] `scripts/ci-tunnel.sh` -- Rename `VASTDB__ENDPOINT` → `AWS_S3_ENDPOINT_URL` (the raw host:port tunnel target), `VASTDB__SSH_JUMP_HOST` → `VASTDB_SSH_JUMP_HOST`, `VASTDB__ENDPOINT_USERNAME` → `VASTDB_ENDPOINT_USERNAME`, `VASTDB__ENDPOINT_PASSWORD` → `VASTDB_ENDPOINT_PASSWORD`; update header comment; after tunnel is up the calling shell exports `AWS_S3_ENDPOINT_URL` (not `VASTDB__ENDPOINT`)
 
 **Acceptance Criteria:**
 - Given `from_connection_params` is called with no `endpoint`, `access_key`, or `secret_key` args, when `AWS_S3_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` are set in the environment, then `vastdb.connect` picks them up automatically (no `TypeError` for missing required args).
@@ -78,7 +78,7 @@ context: []
 | Old | New | Notes |
 |-----|-----|-------|
 | `VASTDB__ENDPOINT` | `AWS_S3_ENDPOINT_URL` | Full URL used by `vastdb.connect` and integration tests |
-| `VASTDB__ENDPOINT` (CI GitLab var, raw `host:port` tunnel target) | `VASTDB_CLUSTER_ENDPOINT` | CI-only; parsed by `ci-tunnel.sh` to set up SSH tunnel; after tunnel is up, CI exports `AWS_S3_ENDPOINT_URL=https://localhost:18151` |
+| `VASTDB__ENDPOINT` (CI GitLab var, raw `host:port` tunnel target) | `AWS_S3_ENDPOINT_URL` | CI-only; parsed by `ci-tunnel.sh` to set up SSH tunnel; after tunnel is up, CI exports `AWS_S3_ENDPOINT_URL=https://localhost:18151` |
 | `VASTDB__ACCESS_KEY` | `AWS_ACCESS_KEY_ID` | |
 | `VASTDB__SECRET_KEY` | `AWS_SECRET_ACCESS_KEY` | |
 | `VASTDB__BUCKET` | `VASTDB_BUCKET` | |

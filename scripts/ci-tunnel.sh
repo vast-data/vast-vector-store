@@ -2,7 +2,7 @@
 # Opens an SSH tunnel to the VAST cluster REST API for CI integration tests.
 #
 # Required env vars (set as GitLab CI/CD variables):
-#   VASTDB_CLUSTER_ENDPOINT   — cluster host:port, e.g. "172.27.151.2:443"
+#   AWS_S3_ENDPOINT_URL   — cluster host:port, e.g. "172.27.151.2:443"
 #   VASTDB_SSH_JUMP_HOST      — SSH jump host IP, e.g. "10.141.200.151"
 #   VASTDB_ENDPOINT_USERNAME  — SSH username on jump host
 #   VASTDB_ENDPOINT_PASSWORD  — SSH password on jump host
@@ -12,8 +12,8 @@
 set -euo pipefail
 
 LOCAL_PORT=18151
-TUNNEL_HOST=$(echo "$VASTDB_CLUSTER_ENDPOINT" | cut -d: -f1)
-TUNNEL_PORT=$(echo "$VASTDB_CLUSTER_ENDPOINT" | cut -d: -f2)
+TUNNEL_HOST=$(echo "$AWS_S3_ENDPOINT_URL" | cut -d: -f1)
+TUNNEL_PORT=$(echo "$AWS_S3_ENDPOINT_URL" | cut -d: -f2)
 
 sshpass -p "$VASTDB_ENDPOINT_PASSWORD" ssh \
   -o StrictHostKeyChecking=no \
