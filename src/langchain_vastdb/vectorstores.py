@@ -152,7 +152,14 @@ class VastDBVectorStore(VectorStore):
     - Configurable column names for id, text, vector, and metadata columns.
     - The ``embeddings`` property exposing the configured ``Embeddings`` model.
 
-    Protected hook methods are available for subclass customization:
+    For the common case of typed metadata columns (e.g., ``category``,
+    ``source``), set the ``_typed_metadata_columns`` class attribute.
+    This is the recommended extension point — it auto-derives
+    ``_select_columns``, ``_build_metadata_columns``, and ``_row_to_document``
+    without requiring any hook overrides.
+
+    For advanced scenarios, protected hook methods are available for
+    subclass customization:
 
     - ``_insert_vectors`` — customize record insertion
     - ``_build_metadata_columns`` — customize column layout for metadata storage
@@ -161,11 +168,7 @@ class VastDBVectorStore(VectorStore):
     - ``_get_by_ids`` — customize document retrieval by ID
     - ``_row_to_document`` — customize row-to-Document conversion
     - ``_select_columns`` — customize columns for full-row retrieval
-
-    For the common case of typed metadata columns (e.g., ``category``,
-    ``source``), set the ``_typed_metadata_columns`` class attribute
-    instead of overriding hooks manually.  This auto-derives
-    ``_select_columns``, ``_build_metadata_columns``, and ``_row_to_document``.
+    - ``_get_table`` — customize table acquisition (e.g., create-on-first-use, table-level options)
 
     Example:
         .. code-block:: python
@@ -203,6 +206,7 @@ class VastDBVectorStore(VectorStore):
         secret_key: str | None = None,
         distance_metric: str | None = None,
         vector_dim: int | None = None,
+        adbc_conn_kwargs: dict | None = None,
     ) -> None:
         """Initialize VastDBVectorStore with a pre-built session.
 
@@ -226,19 +230,18 @@ class VastDBVectorStore(VectorStore):
                 ``"172.27.74.17"`` or ``"query-engine.platform.svc.cluster.local"``.
                 This is separate from the HTTP REST endpoint.
             access_key: S3-style access key for the ADBC connection. Required
-                when ``adbc_driver_path`` is set. **Retained as an instance
-                attribute** for per-call ADBC connection open; callers that
-                prefer not to retain credentials in memory should rotate the
-                key or construct a fresh store per request.
+                when ``adbc_driver_path`` is set.
             secret_key: S3-style secret key for the ADBC connection. Required
-                when ``adbc_driver_path`` is set. **Retained as an instance
-                attribute** — same caveat as ``access_key``.
+                when ``adbc_driver_path`` is set.
             distance_metric: Distance metric to use when the cluster does not
                 return vector index metadata (e.g. ``"l2sq"``, ``"cosine"``,
                 ``"ip"``). When ``None`` and metadata is missing, raises
                 ``ValueError`` instead of silently guessing.
             vector_dim: Dimensionality of the embedding vectors. Only required
                 when calling :meth:`build_table`.
+            adbc_conn_kwargs: Optional dict of ``conn_kwargs`` passed to
+                ``adbc_dbapi.connect()``. Use for ADBC connection-level options
+                such as timeouts or TLS settings.
         """
         self._embedding = embedding
         self._session = session
@@ -254,6 +257,7 @@ class VastDBVectorStore(VectorStore):
         self._access_key = access_key or os.environ.get("AWS_ACCESS_KEY_ID")
         self._secret_key = secret_key or os.environ.get("AWS_SECRET_ACCESS_KEY")
         self._distance_metric = distance_metric
+        self._adbc_conn_kwargs = adbc_conn_kwargs
 
         self._table_ref = TableRef(bucket=bucket, schema=schema, table=table_name)
         self._table_metadata = TableMetadata(ref=self._table_ref)
@@ -651,15 +655,20 @@ class VastDBVectorStore(VectorStore):
         metadatas: list[dict] | None = None,
         *,
         ids: list[str] | None = None,
+        upsert: bool = True,
         **kwargs: Any,
     ) -> list[str]:
-        """Add texts to the vector store with upsert semantics.
+        """Add texts to the vector store.
 
         Embeds the provided texts using the configured embedding model.
-        When IDs are provided (either via the ``ids`` argument or from
-        ``Document.id`` fields), any existing rows with those IDs are deleted
-        before inserting, ensuring upsert semantics. The delete and insert
-        happen in a single transaction.
+        When IDs are provided and ``upsert=True`` (the default), any existing
+        rows with those IDs are deleted before inserting, ensuring upsert
+        semantics. The delete and insert happen in a single transaction.
+
+        Set ``upsert=False`` to skip the pre-delete step when you know the
+        IDs are fresh (e.g. content-hashed IDs for new documents). This
+        avoids a round-trip to the database but will raise on duplicate keys
+        if a row with the same ID already exists.
 
         Per-element ``None`` values in ``ids`` are replaced with auto-generated
         UUIDs, so a mixed list (some explicit IDs, some ``None``) is supported.
@@ -670,6 +679,9 @@ class VastDBVectorStore(VectorStore):
                 Defaults to empty dicts if not provided.
             ids: Optional document IDs. Auto-generated UUIDs for any
                 element that is ``None`` or when the whole list is ``None``.
+            upsert: When ``True`` (default), existing rows with matching IDs
+                are deleted before insert. Set to ``False`` to skip the delete
+                when IDs are known to be fresh.
             **kwargs: Additional keyword arguments (unused by default).
 
         Returns:
@@ -710,9 +722,10 @@ class VastDBVectorStore(VectorStore):
         if metadatas is None:
             metadatas = [{} for _ in texts_list]
         with self._session.transaction() as tx:
-            # Upsert only when the caller supplied IDs — fresh UUIDs cannot
-            # collide with existing rows, so the delete round-trip is skipped.
-            if ids_provided:
+            # Upsert only when the caller supplied IDs and upsert is enabled —
+            # fresh UUIDs cannot collide with existing rows, so the delete
+            # round-trip is skipped.
+            if ids_provided and upsert:
                 self._delete_by_ids(ids, tx=tx)
             self._insert_vectors(texts_list, vectors, metadatas, ids, tx=tx)
         return ids
@@ -1069,6 +1082,7 @@ class VastDBVectorStore(VectorStore):
         *,
         filter_dict: dict | None = None,
         tx: Transaction | None = None,
+        **kwargs: Any,
     ) -> list[tuple[dict, float]]:
         """Search VastDB for similar vectors.
 
@@ -1083,6 +1097,8 @@ class VastDBVectorStore(VectorStore):
             filter_dict: Optional raw filter dict used to build a SQL WHERE
                 clause for the ADBC path.
             tx: Optional transaction for reuse by subclasses.
+            **kwargs: Additional keyword arguments forwarded to
+                ``_do_vector_search_adbc`` and ``_build_adbc_where_clause``.
 
         Returns:
             List of (row_dict, distance_score) tuples.
@@ -1090,7 +1106,8 @@ class VastDBVectorStore(VectorStore):
         columns = self._select_columns()
         with self._ensure_tx(tx) as active_tx:
             return self._do_vector_search(
-                active_tx, query_vector, k, columns, predicate, filter_dict
+                active_tx, query_vector, k, columns, predicate, filter_dict,
+                **kwargs,
             )
 
     def _do_vector_search(
@@ -1101,6 +1118,7 @@ class VastDBVectorStore(VectorStore):
         columns: list[str],
         predicate: ibis.Expr | None,
         filter_dict: dict | None = None,
+        **kwargs: Any,
     ) -> list[tuple[dict, float]]:
         """Execute the vector search within a transaction.
 
@@ -1115,6 +1133,8 @@ class VastDBVectorStore(VectorStore):
             columns: Column names to select.
             predicate: Optional ibis predicate for in-memory fallback filtering.
             filter_dict: Optional raw filter dict for ADBC SQL WHERE clause.
+            **kwargs: Additional keyword arguments forwarded to
+                ``_do_vector_search_adbc`` and ``_build_adbc_where_clause``.
 
         Returns:
             List of (row_dict, distance_score) tuples.
@@ -1138,7 +1158,7 @@ class VastDBVectorStore(VectorStore):
                 pass
 
             try:
-                return self._do_vector_search_adbc(tx, query_vector, k, filter_dict)
+                return self._do_vector_search_adbc(tx, query_vector, k, filter_dict, **kwargs)
             except (TypeError, ValueError):
                 raise
             except adbc_exc_types as exc:
@@ -1168,43 +1188,50 @@ class VastDBVectorStore(VectorStore):
             )
         return self._do_vector_search_fallback(tx, query_vector, k, columns, predicate)
 
-    def _do_vector_search_adbc(
-        self,
-        tx: Transaction,
-        query_vector: list[float],
-        k: int,
-        filter_dict: dict | None,
-    ) -> list[tuple[dict, float]]:
-        """ADBC vector search using ``array_distance()`` SQL (no index needed).
+    @contextmanager
+    def _open_adbc_connection(self):
+        """Yield an open ADBC connection.
 
-        Mirrors the approach used in vast-pipelines: step 1 fetches only
-        ``id + distance`` via ADBC SQL (lightweight), step 2 retrieves the
-        full document columns for the top-k IDs via the VastDB SDK.
-
-        Args:
-            tx: An active VastDB transaction (used for step-2 row fetch).
-            query_vector: The query embedding vector.
-            k: Maximum number of results.
-            filter_dict: Optional dict of equality filters applied as a SQL
-                WHERE clause.
-
-        Returns:
-            List of (row_dict, distance_score) tuples ordered by distance.
+        Override this hook to customise driver, db_kwargs, or conn_kwargs —
+        for example to inject per-request credentials or impersonation headers.
         """
         adbc_dbapi = _get_adbc_dbapi()
 
-        dim = len(query_vector)
-        # Escape any embedded double-quotes in identifier components (P2).
-        bucket_esc = self._table_ref.bucket.replace('"', '""')
-        schema_esc = self._table_ref.schema.replace('"', '""')
-        table_esc = self._table_ref.table.replace('"', '""')
-        table_path = f'"{bucket_esc}/{schema_esc}"."{table_esc}"'
+        db_kwargs = {
+            "vast.db.endpoint": self._adbc_endpoint,
+            "vast.db.access_key": self._access_key,
+            "vast.db.secret_key": self._secret_key,
+        }
 
-        # Build WHERE clause from simple equality filters (P1, P7).
-        # Scalar columns only: equality on _vector_column (float[]) is nonsensical
-        # and equality on _metadata_column is position-dependent on JSON bytes.
-        # Derive allowed columns from _select_columns() so subclass-added typed
-        # columns (e.g., category, level) are accepted when ADBC is enabled.
+        connect_kwargs: dict[str, Any] = {
+            "driver": self._adbc_driver_path,
+            "db_kwargs": db_kwargs,
+        }
+        if self._adbc_conn_kwargs:
+            connect_kwargs["conn_kwargs"] = self._adbc_conn_kwargs
+
+        with adbc_dbapi.connect(**connect_kwargs) as conn:
+            yield conn
+
+    def _build_adbc_where_clause(
+        self, filter_dict: dict | None, **kwargs: Any
+    ) -> str:
+        """Return a SQL WHERE fragment (without leading ``WHERE``) or empty string.
+
+        Override this hook to implement custom filtering logic such as
+        OR conditions, IN clauses, or raw SQL predicates. The default
+        implementation builds simple equality clauses from ``filter_dict``.
+
+        Args:
+            filter_dict: Optional dict of column-name → scalar-value equalities.
+            **kwargs: Additional keyword arguments forwarded from
+                ``similarity_search`` through the search chain. Subclasses
+                may use these to pass e.g. a pre-built ``where`` string.
+
+        Returns:
+            A SQL fragment suitable for insertion after ``WHERE``, or ``""``
+            if no filtering is needed.
+        """
         _allowed_cols = set(self._select_columns())
         where_parts: list[str] = []
         if filter_dict:
@@ -1239,7 +1266,44 @@ class VastDBVectorStore(VectorStore):
                 col_esc = col.replace('"', '""')
                 quoted_col = f'"{col_esc}"'
                 where_parts.append(f"{quoted_col} = {quoted}")
-        where_clause = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+        return " AND ".join(where_parts)
+
+    def _do_vector_search_adbc(
+        self,
+        tx: Transaction,
+        query_vector: list[float],
+        k: int,
+        filter_dict: dict | None,
+        **kwargs: Any,
+    ) -> list[tuple[dict, float]]:
+        """ADBC vector search using ``array_distance()`` SQL (no index needed).
+
+        Mirrors the approach used in vast-pipelines: step 1 fetches only
+        ``id + distance`` via ADBC SQL (lightweight), step 2 retrieves the
+        full document columns for the top-k IDs via the VastDB SDK.
+
+        Args:
+            tx: An active VastDB transaction (used for step-2 row fetch).
+            query_vector: The query embedding vector.
+            k: Maximum number of results.
+            filter_dict: Optional dict of equality filters applied as a SQL
+                WHERE clause.
+            **kwargs: Additional keyword arguments forwarded to
+                ``_build_adbc_where_clause``.
+
+        Returns:
+            List of (row_dict, distance_score) tuples ordered by distance.
+        """
+        dim = len(query_vector)
+        # Escape any embedded double-quotes in identifier components (P2).
+        bucket_esc = self._table_ref.bucket.replace('"', '""')
+        schema_esc = self._table_ref.schema.replace('"', '""')
+        table_esc = self._table_ref.table.replace('"', '""')
+        table_path = f'"{bucket_esc}/{schema_esc}"."{table_esc}"'
+
+        # Build WHERE clause via the protected hook (overridable by subclasses).
+        where_body = self._build_adbc_where_clause(filter_dict, **kwargs)
+        where_clause = f"WHERE {where_body}" if where_body else ""
 
         # Step 1: ADBC SQL — fetch id + distance only (no heavy columns).
         # Cast to plain float to avoid np.float64(...) in the SQL literal.
@@ -1258,14 +1322,7 @@ class VastDBVectorStore(VectorStore):
             f"ORDER BY distance "
             f"LIMIT {k}"
         )
-        with adbc_dbapi.connect(
-            driver=self._adbc_driver_path,
-            db_kwargs={
-                "vast.db.endpoint": self._adbc_endpoint,
-                "vast.db.access_key": self._access_key,
-                "vast.db.secret_key": self._secret_key,
-            },
-        ) as conn:
+        with self._open_adbc_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(query)
                 result = cursor.fetch_arrow_table().to_pydict()
@@ -1327,7 +1384,6 @@ class VastDBVectorStore(VectorStore):
         skipped = 0
         for row in all_rows:
             vec = row.get(self._vector_column)
-            # Coerce to list for Arrow arrays/tuples (DF-j).
             if vec is not None and not isinstance(vec, list):
                 vec = list(vec)
             if not isinstance(vec, list) or len(vec) != qdim:

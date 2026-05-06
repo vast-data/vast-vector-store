@@ -46,10 +46,12 @@ def vectorstore(mock_session, fake_embedding, mock_transaction):
         bucket="b",
         schema="s",
         table_name="t",
+        distance_metric="l2sq",
     )
     # Replace _table_metadata with a MagicMock so load() calls are trackable
     # without needing a real VastDB cluster
     store._table_metadata = MagicMock()
+    store._table_metadata._vector_index = None
     mock_table = MagicMock()
     mock_transaction.table_from_metadata.return_value = mock_table
     return store
@@ -422,8 +424,10 @@ def test_typed_metadata_columns_used_by_insert_vectors(
         bucket="b",
         schema="s",
         table_name="t",
+        distance_metric="l2sq",
     )
     store._table_metadata = MagicMock()
+    store._table_metadata._vector_index = None
     store._metadata_loaded = False
     mock_table = MagicMock()
     mock_transaction.table_from_metadata.return_value = mock_table
@@ -584,8 +588,10 @@ def adbc_vectorstore(mock_session, fake_embedding, mock_transaction):
         adbc_endpoint="localhost:8080",
         access_key="ak",
         secret_key="sk",
+        distance_metric="l2sq",
     )
     store._table_metadata = MagicMock()
+    store._table_metadata._vector_index = None
     mock_table = MagicMock()
     mock_transaction.table_from_metadata.return_value = mock_table
     return store
@@ -654,8 +660,10 @@ def test_adbc_table_path_double_quotes_in_bucket_are_escaped(
         adbc_endpoint="localhost:8080",
         access_key="ak",
         secret_key="sk",
+        distance_metric="l2sq",
     )
     store._table_metadata = MagicMock()
+    store._table_metadata._vector_index = None
     mock_transaction.table_from_metadata.return_value = MagicMock()
 
     mock_dbapi = MagicMock()
@@ -926,8 +934,10 @@ def test_adbc_column_identifiers_are_quoted_in_sql(
         adbc_endpoint="localhost:8080",
         access_key="ak",
         secret_key="sk",
+        distance_metric="l2sq",
     )
     store._table_metadata = MagicMock()
+    store._table_metadata._vector_index = None
     mock_transaction.table_from_metadata.return_value = MagicMock()
 
     mock_dbapi = MagicMock()
@@ -1088,8 +1098,10 @@ def dict_typed_store(mock_session, fake_embedding, mock_transaction):
         bucket="b",
         schema="s",
         table_name="t",
+        distance_metric="l2sq",
     )
     store._table_metadata = MagicMock()
+    store._table_metadata._vector_index = None
     mock_table = MagicMock()
     mock_transaction.table_from_metadata.return_value = mock_table
     return store
@@ -1167,8 +1179,10 @@ def test_dict_typed_columns_used_by_insert_vectors(
         bucket="b",
         schema="s",
         table_name="t",
+        distance_metric="l2sq",
     )
     store._table_metadata = MagicMock()
+    store._table_metadata._vector_index = None
     store._metadata_loaded = False
     mock_table = MagicMock()
     mock_transaction.table_from_metadata.return_value = mock_table
@@ -1618,4 +1632,151 @@ def test_check_schema_compatible_vector_column_dim_mismatch_raises():
 
 def test_check_schema_compatible_empty_expected_always_passes():
     _check_schema_compatible(pa.schema([]), pa.schema([pa.field("x", pa.int8())]))
+
+
+# ---------------------------------------------------------------------------
+# Item D: upsert opt-in
+# ---------------------------------------------------------------------------
+
+
+def test_add_texts_upsert_false_skips_delete(vectorstore, mock_transaction):
+    """When upsert=False the pre-delete step is skipped."""
+    with patch.object(vectorstore, "_delete_by_ids") as mock_del:
+        vectorstore.add_texts(["hello"], ids=["id-1"], upsert=False)
+    mock_del.assert_not_called()
+
+
+def test_add_texts_upsert_true_calls_delete(vectorstore, mock_transaction):
+    """Default upsert=True still deletes before insert."""
+    with patch.object(vectorstore, "_delete_by_ids") as mock_del:
+        vectorstore.add_texts(["hello"], ids=["id-1"])
+    mock_del.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Item B: _build_adbc_where_clause hook
+# ---------------------------------------------------------------------------
+
+
+def test_build_adbc_where_clause_override(
+    mock_session, fake_embedding, mock_transaction
+):
+    """Subclass can override _build_adbc_where_clause to return custom SQL."""
+
+    class CustomWhereStore(VastDBVectorStore):
+        def _build_adbc_where_clause(self, filter_dict, **kwargs):
+            return "category IN ('a','b')"
+
+    store = CustomWhereStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+        adbc_driver_path="/path/to/driver.so",
+        adbc_endpoint="localhost:8080",
+        access_key="ak",
+        secret_key="sk",
+        distance_metric="l2sq",
+    )
+    store._table_metadata = MagicMock()
+    store._table_metadata._vector_index = None
+    mock_transaction.table_from_metadata.return_value = MagicMock()
+
+    mock_dbapi = MagicMock()
+    cm = mock_dbapi.connect.return_value.__enter__.return_value
+    mock_cursor = cm.cursor.return_value.__enter__.return_value
+    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
+        "id": [],
+        "distance": [],
+    }
+
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
+        store._do_vector_search_adbc(
+            mock_transaction, [0.1, 0.2, 0.3], k=4, filter_dict=None
+        )
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert "category IN ('a','b')" in executed_sql
+
+
+# ---------------------------------------------------------------------------
+# Item A: _open_adbc_connection hook + credentials_provider
+# ---------------------------------------------------------------------------
+
+
+def test_open_adbc_connection_override(
+    mock_session, fake_embedding, mock_transaction
+):
+    """Subclass can override _open_adbc_connection to return custom conn."""
+    mock_conn = MagicMock()
+    mock_cursor = mock_conn.cursor.return_value.__enter__.return_value
+    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
+        "id": ["doc1"],
+        "distance": [0.5],
+    }
+
+    class CustomConnStore(VastDBVectorStore):
+        @__import__("contextlib").contextmanager
+        def _open_adbc_connection(self):
+            yield mock_conn
+
+    store = CustomConnStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+        adbc_driver_path="/path/to/driver.so",
+        adbc_endpoint="localhost:8080",
+        access_key="ak",
+        secret_key="sk",
+        distance_metric="l2sq",
+    )
+    store._table_metadata = MagicMock()
+    store._table_metadata._vector_index = None
+    mock_transaction.table_from_metadata.return_value = MagicMock()
+
+    store._do_vector_search_adbc(
+        mock_transaction, [0.1, 0.2, 0.3], k=4, filter_dict=None
+    )
+
+    mock_cursor.execute.assert_called_once()
+
+
+def test_adbc_conn_kwargs_passed_to_connect(
+    mock_session, fake_embedding, mock_transaction
+):
+    """adbc_conn_kwargs are forwarded to adbc_dbapi.connect()."""
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+        adbc_driver_path="/path/to/driver.so",
+        adbc_endpoint="localhost:8080",
+        access_key="ak",
+        secret_key="sk",
+        distance_metric="l2sq",
+        adbc_conn_kwargs={"timeout": 30},
+    )
+    store._table_metadata = MagicMock()
+    store._table_metadata._vector_index = None
+    mock_transaction.table_from_metadata.return_value = MagicMock()
+
+    mock_dbapi = MagicMock()
+    cm = mock_dbapi.connect.return_value.__enter__.return_value
+    mock_cursor = cm.cursor.return_value.__enter__.return_value
+    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
+        "id": [],
+        "distance": [],
+    }
+
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
+        store._do_vector_search_adbc(
+            mock_transaction, [0.1, 0.2, 0.3], k=4, filter_dict=None
+        )
+
+    assert mock_dbapi.connect.call_args[1]["conn_kwargs"] == {"timeout": 30}
 
