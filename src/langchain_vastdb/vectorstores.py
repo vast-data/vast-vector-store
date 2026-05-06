@@ -24,7 +24,7 @@ from vastdb.table_metadata import TableMetadata, TableRef, VectorIndex
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
-    from typing import Self
+    from typing_extensions import Self
 
     from vastdb.table import ITable
     from vastdb.transaction import Transaction
@@ -457,7 +457,7 @@ class VastDBVectorStore(VectorStore):
         vector_column: str = "embedding",
         metadata_column: str = "metadata",
         distance_metric: str | None = None,
-    ) -> "Self":
+    ) -> Self:
         """Create a VastDBVectorStore and provision the backing schema and table.
 
         Combines session construction, schema creation, table creation, and
