@@ -77,10 +77,6 @@ TABLE_SCHEMA = pa.schema(
 session = vastdb.connect(
     endpoint=ENDPOINT, access=ACCESS_KEY, secret=SECRET_KEY, ssl_verify=False
 )
-with session.transaction() as tx:
-    b = tx.bucket(BUCKET)
-    b.create_schema(SCHEMA)
-    b.schema(SCHEMA).create_table(TABLE, TABLE_SCHEMA)
 
 try:
     # -------------------------------------------------------------------
@@ -98,7 +94,14 @@ try:
         table_name=TABLE,
         ssl_verify=False,
         distance_metric="l2sq",
+        vector_dim=VECTOR_DIM,
     )
+
+    # -------------------------------------------------------------------
+    # 4.5. Create table.
+    #    Creates the actual schema and table if they don't exist
+    # -------------------------------------------------------------------
+    store.build_table()
 
     # -------------------------------------------------------------------
     # 5. Add texts with metadata.
