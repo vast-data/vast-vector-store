@@ -20,12 +20,12 @@ import vastdb
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
-from vastdb.table_metadata import TableMetadata, TableRef, VectorIndex
+from vastdb.table_metadata import TableMetadata, TableRef
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
-    from typing_extensions import Self
 
+    from typing_extensions import Self
     from vastdb.table import ITable
     from vastdb.transaction import Transaction
 

@@ -66,7 +66,10 @@ store_a = VastDBVectorStore.build_with_table(
     ssl_verify=False,
     distance_metric="l2sq",
 )
-print(f"[A] Created store: schema={store_a._table_ref.schema!r}  table={store_a._table_ref.table!r}")
+print(
+    f"[A] Created store: schema={store_a._table_ref.schema!r}"
+    f"  table={store_a._table_ref.table!r}"
+)
 
 try:
     ids = store_a.add_texts(
@@ -169,7 +172,7 @@ finally:
 # Useful when you want to keep store construction and table provisioning as
 # separate steps, e.g. in dependency-injection or lazy-init patterns.
 # ---------------------------------------------------------------------------
-import vastdb
+import vastdb  # noqa: E402
 
 SCHEMA_C = f"example_bwt_c_{run_id}"
 TABLE_C = f"example_bwt_c_{run_id}"
