@@ -89,6 +89,7 @@ try:
         schema=SCHEMA,
         table_name=TABLE,
         ssl_verify=False,
+        distance_metric="l2sq",
     )
 
     store.add_texts(

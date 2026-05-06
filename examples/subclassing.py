@@ -119,6 +119,7 @@ try:
         schema=SCHEMA,
         table_name=TABLE,
         ssl_verify=False,
+        distance_metric="l2sq",
     )
 
     ids = store.add_texts(
