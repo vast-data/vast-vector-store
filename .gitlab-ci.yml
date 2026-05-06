@@ -4,10 +4,18 @@
 # Prevent duplicate pipelines: run on MR events and non-MR pushes to the
 # default branch only. Tag pushes are excluded until story 4-3 introduces
 # the publish job (otherwise GitLab would fail with "no jobs in pipeline").
+
+include:
+  - project: 'devops/ci-templates'
+    ref: 'main'
+    file: 'templates/external-repo.gitlab-ci.yml'
+
+
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event"
+    - if: $CI_COMMIT_TAG
 
 variables:
   UV_VERSION: "0.7"
@@ -18,8 +26,10 @@ variables:
 
 stages:
   - lint
+  - security
   - test
   - integration-test
+  - sync
   - publish
 
 # -- Lint job: ruff check on a single Python version --
