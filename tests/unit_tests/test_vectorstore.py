@@ -1780,3 +1780,157 @@ def test_adbc_conn_kwargs_passed_to_connect(
 
     assert mock_dbapi.connect.call_args[1]["conn_kwargs"] == {"timeout": 30}
 
+
+# ---------------------------------------------------------------------------
+# Item C: SQL distance-metric plumbing
+# ---------------------------------------------------------------------------
+
+
+def test_adbc_cosine_metric_uses_cosine_distance_sql(
+    mock_session, fake_embedding, mock_transaction
+):
+    """distance_metric='cosine' produces cosine_distance() in the SQL."""
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+        adbc_driver_path="/path/to/driver.so",
+        adbc_endpoint="localhost:8080",
+        access_key="ak",
+        secret_key="sk",
+        distance_metric="cosine",
+    )
+    store._table_metadata = MagicMock()
+    store._table_metadata._vector_index = None
+    mock_transaction.table_from_metadata.return_value = MagicMock()
+
+    mock_dbapi = MagicMock()
+    cm = mock_dbapi.connect.return_value.__enter__.return_value
+    mock_cursor = cm.cursor.return_value.__enter__.return_value
+    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
+        "id": [],
+        "distance": [],
+    }
+
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
+        store._do_vector_search_adbc(
+            mock_transaction, [0.1, 0.2, 0.3], k=4, filter_dict=None
+        )
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert "cosine_distance(" in executed_sql
+    assert "array_distance(" not in executed_sql
+
+
+def test_adbc_ip_metric_uses_inner_product_sql(
+    mock_session, fake_embedding, mock_transaction
+):
+    """distance_metric='ip' produces inner_product() in the SQL."""
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+        adbc_driver_path="/path/to/driver.so",
+        adbc_endpoint="localhost:8080",
+        access_key="ak",
+        secret_key="sk",
+        distance_metric="ip",
+    )
+    store._table_metadata = MagicMock()
+    store._table_metadata._vector_index = None
+    mock_transaction.table_from_metadata.return_value = MagicMock()
+
+    mock_dbapi = MagicMock()
+    cm = mock_dbapi.connect.return_value.__enter__.return_value
+    mock_cursor = cm.cursor.return_value.__enter__.return_value
+    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
+        "id": [],
+        "distance": [],
+    }
+
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
+        store._do_vector_search_adbc(
+            mock_transaction, [0.1, 0.2, 0.3], k=4, filter_dict=None
+        )
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert "inner_product(" in executed_sql
+    assert "array_distance(" not in executed_sql
+
+
+def test_adbc_l2sq_metric_uses_array_distance_sql(
+    mock_session, fake_embedding, mock_transaction
+):
+    """distance_metric='l2sq' produces array_distance() (default) in the SQL."""
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+        adbc_driver_path="/path/to/driver.so",
+        adbc_endpoint="localhost:8080",
+        access_key="ak",
+        secret_key="sk",
+        distance_metric="l2sq",
+    )
+    store._table_metadata = MagicMock()
+    store._table_metadata._vector_index = None
+    mock_transaction.table_from_metadata.return_value = MagicMock()
+
+    mock_dbapi = MagicMock()
+    cm = mock_dbapi.connect.return_value.__enter__.return_value
+    mock_cursor = cm.cursor.return_value.__enter__.return_value
+    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
+        "id": [],
+        "distance": [],
+    }
+
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
+        store._do_vector_search_adbc(
+            mock_transaction, [0.1, 0.2, 0.3], k=4, filter_dict=None
+        )
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert "array_distance(" in executed_sql
+
+
+def test_unknown_distance_metric_raises():
+    """ValueError for an unrecognized distance metric string."""
+    from langchain_core.embeddings import DeterministicFakeEmbedding
+
+    store = VastDBVectorStore(
+        embedding=DeterministicFakeEmbedding(size=3),
+        session=MagicMock(),
+        bucket="b",
+        schema="s",
+        table_name="t",
+        distance_metric="hamming",
+    )
+    store._table_metadata = MagicMock()
+    store._table_metadata._vector_index = None
+
+    with pytest.raises(ValueError, match="Unknown distance metric"):
+        store._adbc_distance_expr('"embedding"', [0.1, 0.2, 0.3], 3)
+
+
+def test_fallback_cosine_distance_computation(vectorstore, mock_transaction):
+    """Fallback uses cosine distance when metric is 'cosine'."""
+    vectorstore._distance_metric = "cosine"
+    score_fn = VastDBVectorStore._fallback_score_fn("cosine")
+    a = [1.0, 0.0, 0.0]
+    b = [0.0, 1.0, 0.0]
+    assert abs(score_fn(a, b) - 1.0) < 1e-9
+    assert abs(score_fn(a, a) - 0.0) < 1e-9
+
+
+def test_fallback_ip_distance_computation():
+    """Fallback uses negative inner product when metric is 'ip'."""
+    score_fn = VastDBVectorStore._fallback_score_fn("ip")
+    a = [1.0, 2.0, 3.0]
+    b = [4.0, 5.0, 6.0]
+    assert abs(score_fn(a, b) - (-32.0)) < 1e-9

@@ -1268,6 +1268,54 @@ class VastDBVectorStore(VectorStore):
                 where_parts.append(f"{quoted_col} = {quoted}")
         return " AND ".join(where_parts)
 
+    def _resolve_distance_metric(self) -> str:
+        """Return the active distance metric name.
+
+        Resolution order: cluster metadata (authoritative when available),
+        then the constructor ``distance_metric`` parameter as fallback.
+        """
+        vi = self._table_metadata._vector_index
+        if vi is not None:
+            return vi.distance_metric
+        if self._distance_metric is not None:
+            return self._distance_metric
+        raise ValueError(
+            "Cannot resolve distance metric: no cluster metadata and no "
+            "distance_metric constructor parameter."
+        )
+
+    def _adbc_distance_expr(
+        self, vec_col_sql: str, query_vec: list[float], dim: int
+    ) -> str:
+        """Return the SQL expression for distance computation.
+
+        Override this hook for exotic metrics not covered by the built-in
+        mapping. The returned expression must be usable as a SELECT column
+        and produce a scalar float (lower = more similar).
+
+        Args:
+            vec_col_sql: The quoted column identifier for the vector column.
+            query_vec: The query vector as a list of floats.
+            dim: Dimensionality of the vectors.
+
+        Returns:
+            A SQL expression string computing distance.
+        """
+        metric = self._resolve_distance_metric()
+        vec_literal = f"ARRAY{query_vec}::FLOAT[{dim}]"
+        col_cast = f"{vec_col_sql}::FLOAT[{dim}]"
+
+        if metric == "l2sq":
+            return f"array_distance({col_cast}, {vec_literal})"
+        if metric == "cosine":
+            return f"cosine_distance({col_cast}, {vec_literal})"
+        if metric == "ip":
+            return f"inner_product({col_cast}, {vec_literal})"
+        raise ValueError(
+            f"Unknown distance metric {metric!r}; supported: 'l2sq', 'cosine', 'ip'. "
+            f"Override _adbc_distance_expr() for custom metrics."
+        )
+
     def _do_vector_search_adbc(
         self,
         tx: Transaction,
@@ -1313,10 +1361,10 @@ class VastDBVectorStore(VectorStore):
         quoted_id_col = f'"{id_col_esc}"'
         vec_col_esc = self._vector_column.replace('"', '""')
         quoted_vec_col = f'"{vec_col_esc}"'
+        distance_expr = self._adbc_distance_expr(quoted_vec_col, float_vec, dim)
         query = (
             f"SELECT {quoted_id_col}, "
-            f"array_distance({quoted_vec_col}::FLOAT[{dim}], "
-            f"ARRAY{float_vec}::FLOAT[{dim}]) AS distance "
+            f"{distance_expr} AS distance "
             f"FROM {table_path} "
             f"{where_clause} "
             f"ORDER BY distance "
@@ -1357,11 +1405,11 @@ class VastDBVectorStore(VectorStore):
         columns: list[str],
         predicate: ibis.Expr | None,
     ) -> list[tuple[dict, float]]:
-        """In-memory L2-squared distance fallback when ADBC is unavailable.
+        """In-memory distance fallback when ADBC is unavailable.
 
-        Reads id + vector columns, ranks by L2-squared distance (lower=better,
-        matching the native path's ``$distance`` semantics), then fetches full
-        rows for the top-k hits.
+        Supports l2sq, cosine, and ip metrics. Reads id + vector columns,
+        ranks by the configured distance metric (lower=better), then fetches
+        full rows for the top-k hits.
 
         Only available when ``VASTDB_ALLOW_FALLBACK=1`` is set. Raises
         RuntimeError if the table exceeds ``_FALLBACK_MAX_ROWS`` rows.
@@ -1379,6 +1427,9 @@ class VastDBVectorStore(VectorStore):
         reader = table.select(predicate=predicate, columns=scan_columns)
         all_rows = reader.read_all().to_pylist()
 
+        metric = self._resolve_distance_metric()
+        score_fn = self._fallback_score_fn(metric)
+
         qdim = len(query_vector)
         scored: list[tuple[str, float]] = []
         skipped = 0
@@ -1389,7 +1440,7 @@ class VastDBVectorStore(VectorStore):
             if not isinstance(vec, list) or len(vec) != qdim:
                 skipped += 1
                 continue
-            score = sum((a - b) * (a - b) for a, b in zip(query_vector, vec))
+            score = score_fn(query_vector, vec)
             scored.append((row[self._id_column], score))
         if skipped:
             _logger.warning(
@@ -1418,6 +1469,31 @@ class VastDBVectorStore(VectorStore):
             for id_ in top_ids
             if id_ in row_by_id
         ]
+
+    @staticmethod
+    def _fallback_score_fn(metric: str):
+        """Return a scoring function for in-memory distance computation."""
+        if metric == "l2sq":
+            def _l2sq(a: list[float], b: list[float]) -> float:
+                return sum((x - y) * (x - y) for x, y in zip(a, b))
+            return _l2sq
+        if metric == "cosine":
+            def _cosine(a: list[float], b: list[float]) -> float:
+                dot = sum(x * y for x, y in zip(a, b))
+                norm_a = math.sqrt(sum(x * x for x in a))
+                norm_b = math.sqrt(sum(x * x for x in b))
+                if norm_a == 0 or norm_b == 0:
+                    return 1.0
+                return 1.0 - dot / (norm_a * norm_b)
+            return _cosine
+        if metric == "ip":
+            def _ip(a: list[float], b: list[float]) -> float:
+                return -sum(x * y for x, y in zip(a, b))
+            return _ip
+        raise ValueError(
+            f"Fallback search does not support metric {metric!r}; "
+            f"supported: 'l2sq', 'cosine', 'ip'."
+        )
 
     def _row_to_document(
         self,
