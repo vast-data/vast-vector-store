@@ -24,8 +24,8 @@ from __future__ import annotations
 import os
 import uuid
 
-from ibis import _
 from dotenv import load_dotenv
+from ibis import _
 from langchain_core.embeddings import FakeEmbeddings
 
 from langchain_vastdb import TypedColumn, VastDBVectorStore

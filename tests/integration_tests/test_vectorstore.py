@@ -3,14 +3,13 @@
 import os
 import uuid
 import warnings
-
-from ibis import _
 from collections.abc import Generator
 from typing import Any
 
 import pyarrow as pa
 import pytest
 import vastdb
+from ibis import _
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.vectorstores import VectorStore

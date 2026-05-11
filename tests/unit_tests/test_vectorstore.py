@@ -5,9 +5,9 @@ import logging
 import uuid
 from unittest.mock import MagicMock, patch
 
-from ibis import _
 import pyarrow as pa
 import pytest
+from ibis import _
 from langchain_core.documents import Document
 from langchain_core.embeddings import DeterministicFakeEmbedding
 
@@ -905,8 +905,9 @@ def test_predicate_to_sql_where_rejects_non_finite_float():
 
 def test_predicate_to_sql_where_rejects_non_deferred_expr():
     """P1: passing a concrete ibis expression raises TypeError with a helpful message."""
-    from langchain_vastdb.vectorstores import predicate_to_sql_where
     import ibis
+
+    from langchain_vastdb.vectorstores import predicate_to_sql_where
     table = ibis.table({"col": "string"}, name="t")
     with pytest.raises(TypeError, match="deferred ibis expression"):
         predicate_to_sql_where(table.col == "x")

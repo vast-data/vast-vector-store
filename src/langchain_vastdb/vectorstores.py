@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import operator as _operator
 import os
 import time
 import types
@@ -15,7 +16,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import ibis
-import operator as _operator
 import pyarrow as pa
 import vastdb
 from langchain_core.documents import Document
