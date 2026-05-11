@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 import uuid
 
+from ibis import _
 from dotenv import load_dotenv
 from langchain_core.embeddings import FakeEmbeddings
 
@@ -151,7 +152,7 @@ try:
     print("\n[B] Added 3 documents with typed category/level columns.")
 
     results = store_c.similarity_search(
-        "data processing", k=2, filter={"category": "database"}
+        "data processing", k=2, predicate=_["category"] == "database"
     )
     print(f"[B] Filtered search results ({len(results)} docs):")
     for doc in results:

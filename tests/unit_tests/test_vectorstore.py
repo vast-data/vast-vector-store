@@ -5,6 +5,7 @@ import logging
 import uuid
 from unittest.mock import MagicMock, patch
 
+from ibis import _
 import pyarrow as pa
 import pytest
 from langchain_core.documents import Document
@@ -248,15 +249,28 @@ def test_similarity_search_by_vector_skips_embed_query(
             mock_embed_query.assert_not_called()
 
 
-def test_similarity_search_passes_filter_as_ibis_predicate(vectorstore, mock_transaction):
+def test_similarity_search_passes_predicate_to_vector_search(vectorstore, mock_transaction):
+    pred = _["category"] == "news"
     with patch.object(vectorstore, "_do_vector_search", return_value=[]) as mock_search:
+        vectorstore.similarity_search("hello", predicate=pred)
+
+    args = mock_search.call_args.args  # (tx, query_vector, k, columns, predicate)
+    assert args[4] is pred
+
+
+def test_similarity_search_filter_kwarg_raises_helpful_error(vectorstore):
+    with pytest.raises(TypeError, match="'filter' keyword argument was removed"):
         vectorstore.similarity_search("hello", filter={"category": "news"})
 
-    args = mock_search.call_args.args  # (tx, query_vector, k, columns, predicate, filter_dict)
-    predicate = args[4]
-    filter_dict = args[5]
-    assert predicate is not None
-    assert filter_dict == {"category": "news"}
+
+def test_similarity_search_with_score_filter_kwarg_raises(vectorstore):
+    with pytest.raises(TypeError, match="'filter' keyword argument was removed"):
+        vectorstore.similarity_search_with_score("hello", filter={"category": "news"})
+
+
+def test_similarity_search_by_vector_filter_kwarg_raises(vectorstore):
+    with pytest.raises(TypeError, match="'filter' keyword argument was removed"):
+        vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3], filter={"category": "news"})
 
 
 def test_row_to_document_deserializes_json_metadata(vectorstore):
@@ -265,23 +279,6 @@ def test_row_to_document_deserializes_json_metadata(vectorstore):
     assert doc.page_content == "hello world"
     assert doc.metadata == {"source": "test", "page": 1}
 
-
-def test_build_predicate_returns_none_for_none_input(vectorstore):
-    assert vectorstore._build_predicate(None) is None
-
-
-def test_build_predicate_returns_none_for_empty_dict(vectorstore):
-    assert vectorstore._build_predicate({}) is None
-
-
-def test_build_predicate_returns_expr_for_single_key(vectorstore):
-    result = vectorstore._build_predicate({"key": "val"})
-    assert result is not None
-
-
-def test_build_predicate_returns_combined_expr_for_multiple_keys(vectorstore):
-    result = vectorstore._build_predicate({"a": 1, "b": 2})
-    assert result is not None
 
 
 # ---------------------------------------------------------------------------
@@ -597,26 +594,23 @@ def adbc_vectorstore(mock_session, fake_embedding, mock_transaction):
     return store
 
 
-def test_adbc_filter_invalid_column_raises(adbc_vectorstore, mock_transaction):
-    """P1: unknown column name in filter raises ValueError before any DB call."""
-    with pytest.raises(ValueError, match="not an allowed column"):
+def test_adbc_filter_sql_injection_col_is_quoted(adbc_vectorstore, mock_transaction):
+    """P1: double-quotes in column names are escaped (doubled), preventing SQL injection."""
+    mock_dbapi = MagicMock()
+    _cm = mock_dbapi.connect.return_value.__enter__.return_value
+    mock_cursor = _cm.cursor.return_value.__enter__.return_value
+    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
+        "id": [],
+        "distance": [],
+    }
+    predicate = _['"evil"'] == "val"
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
         adbc_vectorstore._do_vector_search_adbc(
-            mock_transaction,
-            [0.1, 0.2, 0.3],
-            k=4,
-            filter_dict={"'; DROP TABLE x; --": "val"},
+            mock_transaction, [0.1, 0.2, 0.3], k=4, predicate=predicate
         )
-
-
-def test_adbc_filter_none_value_raises(adbc_vectorstore, mock_transaction):
-    """P7: None filter value raises ValueError before any DB call."""
-    with pytest.raises(ValueError, match="is None"):
-        adbc_vectorstore._do_vector_search_adbc(
-            mock_transaction,
-            [0.1, 0.2, 0.3],
-            k=4,
-            filter_dict={"id": None},
-        )
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    # The double-quote inside the column name must be doubled, not left bare
+    assert '""evil""' in executed_sql
 
 
 def test_adbc_filter_string_value_with_single_quote_is_escaped(
@@ -636,7 +630,7 @@ def test_adbc_filter_string_value_with_single_quote_is_escaped(
             mock_transaction,
             [0.1, 0.2, 0.3],
             k=4,
-            filter_dict={"id": "it's here"},
+            predicate=_["id"] == "it's here",
         )
 
     executed_sql = mock_cursor.execute.call_args[0][0]
@@ -675,7 +669,7 @@ def test_adbc_table_path_double_quotes_in_bucket_are_escaped(
     }
 
     with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
-        store._do_vector_search_adbc(mock_transaction, [0.1, 0.2, 0.3], k=4, filter_dict=None)
+        store._do_vector_search_adbc(mock_transaction, [0.1, 0.2, 0.3], k=4, predicate=None)
 
     executed_sql = mock_cursor.execute.call_args[0][0]
     assert 'b""ucket' in executed_sql
@@ -731,18 +725,23 @@ def test_retriever_with_k_kwarg(vectorstore):
     assert call_kwargs.kwargs.get("k") == 2 or call_kwargs[1].get("k") == 2
 
 
-def test_retriever_with_filter_kwarg(vectorstore):
-    """AC #3: as_retriever(search_kwargs={"filter": {...}}) passes filter."""
+def test_retriever_with_predicate_kwarg(vectorstore):
+    """AC #3: as_retriever(search_kwargs={"predicate": ...}) passes ibis predicate."""
+    pred = _["category"] == "news"
     retriever = vectorstore.as_retriever(
-        search_kwargs={"filter": {"category": "news"}}
+        search_kwargs={"predicate": pred}
     )
     with patch.object(vectorstore, "similarity_search", return_value=[]) as mock_ss:
         retriever.invoke("query")
 
     mock_ss.assert_called_once()
     call_kwargs = mock_ss.call_args
-    assert call_kwargs.kwargs.get("filter") == {"category": "news"} or \
-        call_kwargs[1].get("filter") == {"category": "news"}
+    passed = (
+        call_kwargs.kwargs.get("predicate")
+        if "predicate" in call_kwargs.kwargs
+        else call_kwargs[1].get("predicate")
+    )
+    assert passed is pred
 
 
 def test_lcel_rag_chain_executes(vectorstore):
@@ -889,27 +888,19 @@ def test_adbc_available_rejects_whitespace_endpoint(mock_session, fake_embedding
 # --- AC3: ADBC SQL type whitelist ---
 
 
-def test_adbc_filter_rejects_unsupported_type(adbc_vectorstore, mock_transaction):
-    """DF-9: Non-scalar filter values should raise TypeError."""
-    with pytest.raises(TypeError, match="unsupported type"):
-        adbc_vectorstore._do_vector_search_adbc(
-            mock_transaction,
-            [0.1, 0.2, 0.3],
-            k=4,
-            filter_dict={"id": [1, 2, 3]},
-        )
+def test_predicate_to_sql_where_rejects_unsupported_literal_type():
+    """DF-9: Passing a list as an equality literal raises TypeError (use .isin() instead)."""
+    from langchain_vastdb.vectorstores import predicate_to_sql_where
+    with pytest.raises(TypeError, match="Unsupported ibis resolver node type"):
+        predicate_to_sql_where(_["id"] == [1, 2, 3])
 
 
-def test_adbc_filter_rejects_non_finite_float(adbc_vectorstore, mock_transaction):
+def test_predicate_to_sql_where_rejects_non_finite_float():
     """Review-P4: NaN / Inf must not be spliced into SQL literals."""
+    from langchain_vastdb.vectorstores import predicate_to_sql_where
     for bad in (float("nan"), float("inf"), float("-inf")):
-        with pytest.raises(TypeError, match="non-finite"):
-            adbc_vectorstore._do_vector_search_adbc(
-                mock_transaction,
-                [0.1, 0.2, 0.3],
-                k=4,
-                filter_dict={"id": bad},
-            )
+        with pytest.raises(ValueError, match="Non-finite"):
+            predicate_to_sql_where(_["id"] > bad)
 
 
 # --- AC3: quoted column identifiers in ADBC SQL ---
@@ -950,7 +941,7 @@ def test_adbc_column_identifiers_are_quoted_in_sql(
 
     with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
         store._do_vector_search_adbc(
-            mock_transaction, [0.1, 0.2, 0.3], k=4, filter_dict={"select": "x"},
+            mock_transaction, [0.1, 0.2, 0.3], k=4, predicate=_["select"] == "x",
         )
 
     executed_sql = mock_cursor.execute.call_args[0][0]
@@ -1008,7 +999,7 @@ def test_adbc_step1_warns_on_duplicate_ids(adbc_vectorstore, mock_transaction, c
         "langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi
     ), caplog.at_level(logging.WARNING, logger="langchain_vastdb.vectorstores"):
         adbc_vectorstore._do_vector_search_adbc(
-            mock_transaction, [0.1, 0.2, 0.3], k=3, filter_dict=None,
+            mock_transaction, [0.1, 0.2, 0.3], k=3, predicate=None,
         )
 
     assert any("duplicate IDs collapsed" in rec.message for rec in caplog.records), caplog.text
@@ -1040,7 +1031,7 @@ def test_vector_search_warns_and_falls_back_on_step2_sdk_failure(
         logging.WARNING, logger="langchain_vastdb.vectorstores"
     ):
         result = adbc_vectorstore._vector_search(
-            [0.1, 0.2, 0.3], k=4, predicate=None, filter_dict=None,
+            [0.1, 0.2, 0.3], k=4, predicate=None,
         )
 
     assert result == fallback_sentinel
@@ -1054,15 +1045,14 @@ def test_vector_search_warns_and_falls_back_on_step2_sdk_failure(
 def test_vector_search_does_not_swallow_filter_validation_errors(
     adbc_vectorstore, mock_transaction
 ):
-    """Review-P1: AC3 TypeError/ValueError from filter validation must propagate
+    """Review-P1: TypeError/ValueError from predicate-to-SQL conversion must propagate
     rather than triggering the in-memory fallback."""
     with patch.object(
         adbc_vectorstore, "_do_vector_search_fallback"
     ) as mock_fallback:
-        with pytest.raises(TypeError, match="unsupported type"):
+        with pytest.raises(TypeError, match="Unsupported ibis resolver node type"):
             adbc_vectorstore._vector_search(
-                [0.1, 0.2, 0.3], k=4, predicate=None,
-                filter_dict={"id": [1, 2, 3]},
+                [0.1, 0.2, 0.3], k=4, predicate=_["id"] == [1, 2, 3],
             )
     mock_fallback.assert_not_called()
 
@@ -1214,7 +1204,7 @@ def test_vector_search_raises_when_adbc_not_configured_and_fallback_disabled(
         with pytest.raises(RuntimeError, match="ADBC is not configured"):
             vectorstore._do_vector_search(
                 mock_transaction, [0.1, 0.2, 0.3], k=4,
-                columns=["id"], predicate=None, filter_dict=None,
+                columns=["id"], predicate=None,
             )
 
 
@@ -1239,7 +1229,7 @@ def test_vector_search_step2_failure_raises_when_fallback_disabled(
     ):
         with pytest.raises(RuntimeError, match="boom"):
             adbc_vectorstore._vector_search(
-                [0.1, 0.2, 0.3], k=4, predicate=None, filter_dict=None,
+                [0.1, 0.2, 0.3], k=4, predicate=None,
             )
 
 
@@ -1664,7 +1654,7 @@ def test_build_adbc_where_clause_override(
     """Subclass can override _build_adbc_where_clause to return custom SQL."""
 
     class CustomWhereStore(VastDBVectorStore):
-        def _build_adbc_where_clause(self, filter_dict, **kwargs):
+        def _build_adbc_where_clause(self, predicate, **kwargs):
             return "category IN ('a','b')"
 
     store = CustomWhereStore(
@@ -1693,7 +1683,7 @@ def test_build_adbc_where_clause_override(
 
     with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
         store._do_vector_search_adbc(
-            mock_transaction, [0.1, 0.2, 0.3], k=4, filter_dict=None
+            mock_transaction, [0.1, 0.2, 0.3], k=4, predicate=None
         )
 
     executed_sql = mock_cursor.execute.call_args[0][0]
@@ -1738,7 +1728,7 @@ def test_open_adbc_connection_override(
     mock_transaction.table_from_metadata.return_value = MagicMock()
 
     store._do_vector_search_adbc(
-        mock_transaction, [0.1, 0.2, 0.3], k=4, filter_dict=None
+        mock_transaction, [0.1, 0.2, 0.3], k=4, predicate=None
     )
 
     mock_cursor.execute.assert_called_once()
@@ -1775,7 +1765,7 @@ def test_adbc_conn_kwargs_passed_to_connect(
 
     with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
         store._do_vector_search_adbc(
-            mock_transaction, [0.1, 0.2, 0.3], k=4, filter_dict=None
+            mock_transaction, [0.1, 0.2, 0.3], k=4, predicate=None
         )
 
     assert mock_dbapi.connect.call_args[1]["conn_kwargs"] == {"timeout": 30}
@@ -1816,7 +1806,7 @@ def test_adbc_cosine_metric_uses_cosine_distance_sql(
 
     with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
         store._do_vector_search_adbc(
-            mock_transaction, [0.1, 0.2, 0.3], k=4, filter_dict=None
+            mock_transaction, [0.1, 0.2, 0.3], k=4, predicate=None
         )
 
     executed_sql = mock_cursor.execute.call_args[0][0]
@@ -1854,7 +1844,7 @@ def test_adbc_ip_metric_uses_inner_product_sql(
 
     with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
         store._do_vector_search_adbc(
-            mock_transaction, [0.1, 0.2, 0.3], k=4, filter_dict=None
+            mock_transaction, [0.1, 0.2, 0.3], k=4, predicate=None
         )
 
     executed_sql = mock_cursor.execute.call_args[0][0]
@@ -1892,7 +1882,7 @@ def test_adbc_l2sq_metric_uses_array_distance_sql(
 
     with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
         store._do_vector_search_adbc(
-            mock_transaction, [0.1, 0.2, 0.3], k=4, filter_dict=None
+            mock_transaction, [0.1, 0.2, 0.3], k=4, predicate=None
         )
 
     executed_sql = mock_cursor.execute.call_args[0][0]

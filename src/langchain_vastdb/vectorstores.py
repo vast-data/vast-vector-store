@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import ibis
+import operator as _operator
 import pyarrow as pa
 import vastdb
 from langchain_core.documents import Document
@@ -126,6 +127,101 @@ def _check_schema_compatible(expected: pa.Schema, actual: pa.Schema) -> None:
 def _fallback_allowed() -> bool:
     """Return True when the VASTDB_ALLOW_FALLBACK env var is set to a truthy value."""
     return os.environ.get("VASTDB_ALLOW_FALLBACK", "").lower() in ("1", "true", "yes")
+
+
+_IBIS_COMPARISON_OPS: dict[object, str] = {
+    _operator.eq: "=",
+    _operator.ne: "!=",
+    _operator.lt: "<",
+    _operator.le: "<=",
+    _operator.gt: ">",
+    _operator.ge: ">=",
+}
+
+
+def _ibis_literal_to_sql(val: object) -> str:
+    if val is None:
+        return "NULL"
+    if isinstance(val, bool):
+        return "TRUE" if val else "FALSE"
+    if isinstance(val, str):
+        return "'" + val.replace("'", "''") + "'"
+    if isinstance(val, (int, float)):
+        if isinstance(val, float) and not math.isfinite(val):
+            raise ValueError(f"Non-finite float {val!r} is not a valid SQL literal")
+        return str(val)
+    raise TypeError(
+        f"Unsupported filter literal type {type(val).__name__!r}: {val!r}"
+    )
+
+
+def _ibis_col_sql(item_node: object) -> str:
+    """Return a quoted SQL identifier from an ibis resolver Item node."""
+    name: str = item_node.indexer.value  # type: ignore[attr-defined]
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _ibis_resolver_to_sql(node: object) -> str:
+    """Recursively convert an ibis ``_resolver`` node to a SQL WHERE fragment."""
+    t = type(node).__name__
+    if t == "BinaryOperator":
+        f = node.func  # type: ignore[attr-defined]
+        if f is _operator.and_:
+            return (
+                f"({_ibis_resolver_to_sql(node.left)})"  # type: ignore[attr-defined]
+                f" AND "
+                f"({_ibis_resolver_to_sql(node.right)})"  # type: ignore[attr-defined]
+            )
+        if f is _operator.or_:
+            return (
+                f"({_ibis_resolver_to_sql(node.left)})"  # type: ignore[attr-defined]
+                f" OR "
+                f"({_ibis_resolver_to_sql(node.right)})"  # type: ignore[attr-defined]
+            )
+        if f in _IBIS_COMPARISON_OPS:
+            return (
+                f"{_ibis_resolver_to_sql(node.left)}"  # type: ignore[attr-defined]
+                f" {_IBIS_COMPARISON_OPS[f]} "
+                f"{_ibis_resolver_to_sql(node.right)}"  # type: ignore[attr-defined]
+            )
+        raise TypeError(f"Unsupported ibis binary operator: {f!r}")
+    if t == "UnaryOperator":
+        if node.func is _operator.invert:  # type: ignore[attr-defined]
+            return f"NOT ({_ibis_resolver_to_sql(node.arg)})"  # type: ignore[attr-defined]
+        raise TypeError(f"Unsupported ibis unary operator: {node.func!r}")  # type: ignore[attr-defined]
+    if t == "Call":
+        method: str = node.func.name.value  # type: ignore[attr-defined]  # Attr.name is a Just
+        col_sql = _ibis_col_sql(node.func.obj)  # type: ignore[attr-defined]  # Attr.obj is an Item
+        seq = node.args[0]  # type: ignore[attr-defined]  # Sequence node
+        sql_vals = ", ".join(_ibis_literal_to_sql(v.value) for v in seq.values)
+        if method == "isin":
+            return f"{col_sql} IN ({sql_vals})"
+        if method == "notin":
+            return f"{col_sql} NOT IN ({sql_vals})"
+        raise TypeError(f"Unsupported ibis method call: {method!r}")
+    if t == "Item":
+        return _ibis_col_sql(node)
+    if t == "Just":
+        return _ibis_literal_to_sql(node.value)  # type: ignore[attr-defined]
+    raise TypeError(f"Unsupported ibis resolver node type {t!r}: {node!r}")
+
+
+def predicate_to_sql_where(predicate: ibis.Expr) -> str:
+    """Convert an ``ibis._`` deferred predicate to a SQL WHERE fragment (no leading WHERE).
+
+    Supports: ``==``, ``!=``, ``<``, ``<=``, ``>``, ``>=``, ``&`` (AND),
+    ``|`` (OR), ``~`` (NOT), ``.isin()``, ``.notin()``.
+
+    Args:
+        predicate: An ibis deferred filter expression built with ``ibis._``.
+
+    Returns:
+        A SQL string suitable for insertion after ``WHERE``.
+
+    Raises:
+        TypeError: If the predicate contains an unsupported node type or operator.
+    """
+    return _ibis_resolver_to_sql(predicate._resolver)  # type: ignore[attr-defined]
 
 
 def _generate_sortable_id() -> str:
@@ -842,39 +938,47 @@ class VastDBVectorStore(VectorStore):
         self,
         query: str,
         k: int = 4,
+        *,
+        predicate: ibis.Expr | None = None,
         **kwargs: Any,
     ) -> list[Document]:
         """Search for documents similar to the query string.
 
-        Embeds the query using the configured embedding model, converts
-        an optional ``filter`` dict to an ibis predicate, then delegates
+        Embeds the query using the configured embedding model, then delegates
         to the ``_vector_search`` hook.
 
         Args:
             query: The text query to search for.
             k: Number of results to return.
-            **kwargs: Additional arguments. Supports ``filter`` (dict) for
-                metadata filtering.
+            predicate: Optional ibis deferred filter expression, e.g.
+                ``ibis._["category"] == "news"`` or
+                ``(ibis._["level"] == "advanced") & (ibis._["score"] > 0.9)``.
+            **kwargs: Additional keyword arguments forwarded to the search hooks.
 
         Returns:
             List of Documents most similar to the query.
         """
+        if "filter" in kwargs:
+            raise TypeError(
+                "The 'filter' keyword argument was removed. "
+                "Pass an ibis predicate instead: predicate=ibis._['col'] == val"
+            )
         if not isinstance(k, int) or isinstance(k, bool):
             raise TypeError(f"k must be an integer, got {type(k).__name__}")
         if k <= 0:
             raise ValueError(f"k must be a positive integer, got {k}")
-        filter_dict = kwargs.get("filter")
         query_vector = self._embedding.embed_query(query)
         if not all(math.isfinite(x) for x in query_vector):
             raise ValueError("query vector contains non-finite values")
-        predicate = self._build_predicate(filter_dict)
-        results = self._vector_search(query_vector, k, predicate=predicate, filter_dict=filter_dict)
+        results = self._vector_search(query_vector, k, predicate=predicate)
         return [self._row_to_document(row) for row, _ in results]
 
     def similarity_search_with_score(
         self,
         query: str,
         k: int = 4,
+        *,
+        predicate: ibis.Expr | None = None,
         **kwargs: Any,
     ) -> list[tuple[Document, float]]:
         """Search for documents similar to the query, returning scores.
@@ -882,28 +986,33 @@ class VastDBVectorStore(VectorStore):
         Args:
             query: The text query to search for.
             k: Number of results to return.
-            **kwargs: Additional arguments. Supports ``filter`` (dict) for
-                metadata filtering.
+            predicate: Optional ibis deferred filter expression.
+            **kwargs: Additional keyword arguments forwarded to the search hooks.
 
         Returns:
             List of (Document, distance_score) tuples, ordered by similarity.
         """
+        if "filter" in kwargs:
+            raise TypeError(
+                "The 'filter' keyword argument was removed. "
+                "Pass an ibis predicate instead: predicate=ibis._['col'] == val"
+            )
         if not isinstance(k, int) or isinstance(k, bool):
             raise TypeError(f"k must be an integer, got {type(k).__name__}")
         if k <= 0:
             raise ValueError(f"k must be a positive integer, got {k}")
-        filter_dict = kwargs.get("filter")
         query_vector = self._embedding.embed_query(query)
         if not all(math.isfinite(x) for x in query_vector):
             raise ValueError("query vector contains non-finite values")
-        predicate = self._build_predicate(filter_dict)
-        results = self._vector_search(query_vector, k, predicate=predicate, filter_dict=filter_dict)
+        results = self._vector_search(query_vector, k, predicate=predicate)
         return [(self._row_to_document(row, score), score) for row, score in results]
 
     def similarity_search_by_vector(
         self,
         embedding: list[float],
         k: int = 4,
+        *,
+        predicate: ibis.Expr | None = None,
         **kwargs: Any,
     ) -> list[Document]:
         """Search for documents by a pre-computed embedding vector.
@@ -914,12 +1023,17 @@ class VastDBVectorStore(VectorStore):
         Args:
             embedding: The pre-computed query embedding vector.
             k: Number of results to return.
-            **kwargs: Additional arguments. Supports ``filter`` (dict) for
-                metadata filtering.
+            predicate: Optional ibis deferred filter expression.
+            **kwargs: Additional keyword arguments forwarded to the search hooks.
 
         Returns:
             List of Documents most similar to the embedding.
         """
+        if "filter" in kwargs:
+            raise TypeError(
+                "The 'filter' keyword argument was removed. "
+                "Pass an ibis predicate instead: predicate=ibis._['col'] == val"
+            )
         if not isinstance(k, int) or isinstance(k, bool):
             raise TypeError(f"k must be an integer, got {type(k).__name__}")
         if k <= 0:
@@ -928,9 +1042,7 @@ class VastDBVectorStore(VectorStore):
             raise ValueError("query vector must be non-empty")
         if not all(math.isfinite(x) for x in embedding):
             raise ValueError("query vector contains non-finite values")
-        filter_dict = kwargs.get("filter")
-        predicate = self._build_predicate(filter_dict)
-        results = self._vector_search(embedding, k, predicate=predicate, filter_dict=filter_dict)
+        results = self._vector_search(embedding, k, predicate=predicate)
         return [self._row_to_document(row) for row, _ in results]
 
     def delete(self, ids: list[str] | None = None, **kwargs: Any) -> bool | None:
@@ -1039,29 +1151,6 @@ class VastDBVectorStore(VectorStore):
             reader = table.select(columns=columns, predicate=predicate)
             return reader.read_all().to_pylist()
 
-    def _build_predicate(
-        self, filter_dict: dict | None
-    ) -> ibis.Expr | None:
-        """Convert a filter dict to an ibis predicate expression.
-
-        Builds equality predicates for each key-value pair and combines
-        them with logical AND. Filter keys are interpreted as table column
-        names.
-
-        Args:
-            filter_dict: Optional dict of column-name to value mappings.
-
-        Returns:
-            An ibis predicate expression, or ``None`` if no filter provided.
-        """
-        if not filter_dict:
-            return None
-        predicates = [ibis._[key] == value for key, value in filter_dict.items()]
-        result = predicates[0]
-        for pred in predicates[1:]:
-            result = result & pred
-        return result
-
     def _adbc_available(self) -> bool:
         """Return True when all four ADBC parameters are configured and non-blank."""
         def _nonblank(val: object) -> bool:
@@ -1080,7 +1169,6 @@ class VastDBVectorStore(VectorStore):
         k: int,
         predicate: ibis.Expr | None = None,
         *,
-        filter_dict: dict | None = None,
         tx: Transaction | None = None,
         **kwargs: Any,
     ) -> list[tuple[dict, float]]:
@@ -1093,9 +1181,9 @@ class VastDBVectorStore(VectorStore):
         Args:
             query_vector: The query embedding vector.
             k: Maximum number of results to return.
-            predicate: Optional ibis predicate for in-memory fallback filtering.
-            filter_dict: Optional raw filter dict used to build a SQL WHERE
-                clause for the ADBC path.
+            predicate: Optional ibis deferred predicate used for both the ADBC
+                SQL WHERE clause (converted via ``predicate_to_sql_where``) and
+                the in-memory fallback scan (passed directly to the VastDB SDK).
             tx: Optional transaction for reuse by subclasses.
             **kwargs: Additional keyword arguments forwarded to
                 ``_do_vector_search_adbc`` and ``_build_adbc_where_clause``.
@@ -1106,7 +1194,7 @@ class VastDBVectorStore(VectorStore):
         columns = self._select_columns()
         with self._ensure_tx(tx) as active_tx:
             return self._do_vector_search(
-                active_tx, query_vector, k, columns, predicate, filter_dict,
+                active_tx, query_vector, k, columns, predicate,
                 **kwargs,
             )
 
@@ -1117,7 +1205,6 @@ class VastDBVectorStore(VectorStore):
         k: int,
         columns: list[str],
         predicate: ibis.Expr | None,
-        filter_dict: dict | None = None,
         **kwargs: Any,
     ) -> list[tuple[dict, float]]:
         """Execute the vector search within a transaction.
@@ -1131,8 +1218,9 @@ class VastDBVectorStore(VectorStore):
             query_vector: The query embedding vector.
             k: Maximum number of results.
             columns: Column names to select.
-            predicate: Optional ibis predicate for in-memory fallback filtering.
-            filter_dict: Optional raw filter dict for ADBC SQL WHERE clause.
+            predicate: Optional ibis deferred predicate. Converted to a SQL
+                WHERE clause for the ADBC path and passed directly to the VastDB
+                SDK for the fallback path.
             **kwargs: Additional keyword arguments forwarded to
                 ``_do_vector_search_adbc`` and ``_build_adbc_where_clause``.
 
@@ -1158,7 +1246,7 @@ class VastDBVectorStore(VectorStore):
                 pass
 
             try:
-                return self._do_vector_search_adbc(tx, query_vector, k, filter_dict, **kwargs)
+                return self._do_vector_search_adbc(tx, query_vector, k, predicate, **kwargs)
             except (TypeError, ValueError):
                 raise
             except adbc_exc_types as exc:
@@ -1214,59 +1302,27 @@ class VastDBVectorStore(VectorStore):
             yield conn
 
     def _build_adbc_where_clause(
-        self, filter_dict: dict | None, **kwargs: Any
+        self, predicate: ibis.Expr | None, **kwargs: Any
     ) -> str:
         """Return a SQL WHERE fragment (without leading ``WHERE``) or empty string.
 
-        Override this hook to implement custom filtering logic such as
-        OR conditions, IN clauses, or raw SQL predicates. The default
-        implementation builds simple equality clauses from ``filter_dict``.
+        Override this hook to implement filtering that ``predicate_to_sql_where``
+        cannot express — for example VastDB-specific functions such as
+        ``list_has_any()``, or to inject a raw SQL string directly.
 
         Args:
-            filter_dict: Optional dict of column-name → scalar-value equalities.
-            **kwargs: Additional keyword arguments forwarded from
-                ``similarity_search`` through the search chain. Subclasses
-                may use these to pass e.g. a pre-built ``where`` string.
+            predicate: Optional ibis deferred predicate to convert to SQL.
+            **kwargs: Additional keyword arguments forwarded from the search
+                chain. Subclasses may use these to pass e.g. a pre-built
+                ``where`` string.
 
         Returns:
             A SQL fragment suitable for insertion after ``WHERE``, or ``""``
             if no filtering is needed.
         """
-        _allowed_cols = set(self._select_columns())
-        where_parts: list[str] = []
-        if filter_dict:
-            for col, val in filter_dict.items():
-                if col not in _allowed_cols:
-                    raise ValueError(
-                        f"filter key {col!r} is not an allowed column name; "
-                        f"allowed: {sorted(_allowed_cols)}"
-                    )
-                if val is None:
-                    raise ValueError(
-                        f"filter value for {col!r} is None; use IS NULL via a "
-                        "predicate or omit the key"
-                    )
-                if isinstance(val, bool):
-                    quoted = "TRUE" if val else "FALSE"
-                elif isinstance(val, str):
-                    escaped = val.replace("'", "''")
-                    quoted = f"'{escaped}'"
-                elif isinstance(val, (int, float)):
-                    if isinstance(val, float) and not math.isfinite(val):
-                        raise TypeError(
-                            f"filter value for {col!r} is non-finite ({val!r}); "
-                            "NaN and infinity are not valid SQL literals"
-                        )
-                    quoted = str(val)
-                else:
-                    raise TypeError(
-                        f"filter value for {col!r} has unsupported type "
-                        f"{type(val).__name__}; allowed types: str, int, float, bool"
-                    )
-                col_esc = col.replace('"', '""')
-                quoted_col = f'"{col_esc}"'
-                where_parts.append(f"{quoted_col} = {quoted}")
-        return " AND ".join(where_parts)
+        if predicate is None:
+            return ""
+        return predicate_to_sql_where(predicate)
 
     def _resolve_distance_metric(self) -> str:
         """Return the active distance metric name.
@@ -1321,7 +1377,7 @@ class VastDBVectorStore(VectorStore):
         tx: Transaction,
         query_vector: list[float],
         k: int,
-        filter_dict: dict | None,
+        predicate: ibis.Expr | None,
         **kwargs: Any,
     ) -> list[tuple[dict, float]]:
         """ADBC vector search using ``array_distance()`` SQL (no index needed).
@@ -1334,8 +1390,8 @@ class VastDBVectorStore(VectorStore):
             tx: An active VastDB transaction (used for step-2 row fetch).
             query_vector: The query embedding vector.
             k: Maximum number of results.
-            filter_dict: Optional dict of equality filters applied as a SQL
-                WHERE clause.
+            predicate: Optional ibis predicate converted to a SQL WHERE clause
+                via ``_build_adbc_where_clause``.
             **kwargs: Additional keyword arguments forwarded to
                 ``_build_adbc_where_clause``.
 
@@ -1350,7 +1406,7 @@ class VastDBVectorStore(VectorStore):
         table_path = f'"{bucket_esc}/{schema_esc}"."{table_esc}"'
 
         # Build WHERE clause via the protected hook (overridable by subclasses).
-        where_body = self._build_adbc_where_clause(filter_dict, **kwargs)
+        where_body = self._build_adbc_where_clause(predicate, **kwargs)
         where_clause = f"WHERE {where_body}" if where_body else ""
 
         # Step 1: ADBC SQL — fetch id + distance only (no heavy columns).

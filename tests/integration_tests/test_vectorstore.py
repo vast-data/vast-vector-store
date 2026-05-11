@@ -3,6 +3,8 @@
 import os
 import uuid
 import warnings
+
+from ibis import _
 from collections.abc import Generator
 from typing import Any
 
@@ -259,13 +261,13 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
         assert len(docs) == 2
 
     def test_retriever_with_text_filter(self, vectorstore: VectorStore) -> None:
-        """AC #3: Retriever with search_kwargs={"filter": {"text": ...}} filters correctly."""
+        """AC #3: Retriever with search_kwargs={"predicate": ...} filters correctly."""
         vectorstore.add_texts(
             ["target text", "other text", "more text"],
             ids=["f-1", "f-2", "f-3"],
         )
         retriever = vectorstore.as_retriever(
-            search_kwargs={"k": 10, "filter": {"text": "target text"}}
+            search_kwargs={"k": 10, "predicate": _["text"] == "target text"}
         )
         docs = retriever.invoke("text")
         assert len(docs) >= 1

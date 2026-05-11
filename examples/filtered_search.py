@@ -3,10 +3,10 @@
 Demonstrates adding documents with varied metadata and using the
 ``filter`` parameter to narrow similarity search results.
 
-The ``filter`` parameter in ``similarity_search()`` works on **table
-columns**, not JSON metadata fields.  This example therefore promotes
-``category`` and ``level`` to typed columns via ``_typed_metadata_columns``
-so that ibis predicates can filter on them directly.
+The ``predicate`` parameter in ``similarity_search()`` accepts ibis deferred
+expressions and works on **table columns**, not JSON metadata fields.  This
+example promotes ``category`` and ``level`` to typed columns via
+``_typed_metadata_columns`` so they can be filtered directly.
 
 Prerequisites:
     - A running VAST cluster with vector search support
@@ -24,6 +24,7 @@ import uuid
 import pyarrow as pa
 import vastdb
 from dotenv import load_dotenv
+from ibis import _
 from langchain_core.embeddings import FakeEmbeddings
 
 from langchain_vastdb import TypedColumn, VastDBVectorStore
@@ -49,9 +50,9 @@ BUCKET = os.environ.get("VASTDB_BUCKET", "example-bucket")
 
 # ---------------------------------------------------------------------------
 # 2. Define a subclass with typed columns for the filterable fields.
-#    The ``filter`` dict in ``similarity_search()`` creates ibis equality
-#    predicates on table columns, so the fields we want to filter on must
-#    be stored as first-class columns.
+#    The ``predicate`` argument in ``similarity_search()`` works on table
+#    columns, so the fields we want to filter on must be stored as
+#    first-class columns via ``_typed_metadata_columns``.
 #
 #    ``_typed_metadata_columns`` handles everything: insert, select, and
 #    document reconstruction.  Extra metadata fields are preserved in the
@@ -123,7 +124,7 @@ try:
     # -------------------------------------------------------------------
     # 5. Add documents with diverse metadata.
     #    "category" and "level" are promoted to typed columns, making
-    #    them filterable via the ``filter`` parameter.
+    #    them filterable via the ``predicate`` parameter.
     # -------------------------------------------------------------------
     store.add_texts(
         texts=[
@@ -155,13 +156,12 @@ try:
         print(f"  - {doc.page_content!r}  metadata={doc.metadata}")
 
     # -------------------------------------------------------------------
-    # 7. Search WITH a filter -- only returns documents whose typed
-    #    column matches.  The filter dict is converted to ibis equality
-    #    predicates and applied during the vector search.
+    # 7. Search WITH a predicate -- only returns documents whose typed
+    #    column matches.  Pass an ibis deferred expression directly.
     # -------------------------------------------------------------------
     print("\n--- Filtered search: category='ml' ---")
     results = store.similarity_search(
-        "data processing", k=3, filter={"category": "ml"}
+        "data processing", k=3, predicate=_["category"] == "ml"
     )
     for doc in results:
         print(f"  - {doc.page_content!r}  metadata={doc.metadata}")
@@ -171,17 +171,18 @@ try:
     # -------------------------------------------------------------------
     print("\n--- Filtered search: category='database' ---")
     results = store.similarity_search(
-        "performance optimization", k=3, filter={"category": "database"}
+        "performance optimization", k=3, predicate=_["category"] == "database"
     )
     for doc in results:
         print(f"  - {doc.page_content!r}  metadata={doc.metadata}")
 
     # -------------------------------------------------------------------
-    # 9. Filter by level to show another metadata dimension.
+    # 9. Compound predicate: category='ml' AND level='beginner'.
     # -------------------------------------------------------------------
-    print("\n--- Filtered search: level='beginner' ---")
+    print("\n--- Filtered search: category='ml' AND level='beginner' ---")
     results = store.similarity_search(
-        "learning", k=3, filter={"level": "beginner"}
+        "learning", k=3,
+        predicate=(_["category"] == "ml") & (_["level"] == "beginner"),
     )
     for doc in results:
         print(f"  - {doc.page_content!r}  metadata={doc.metadata}")
