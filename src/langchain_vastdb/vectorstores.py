@@ -195,9 +195,9 @@ def _ibis_resolver_to_sql(node: object) -> str:
         seq = node.args[0]  # type: ignore[attr-defined]  # Sequence node
         sql_vals = ", ".join(_ibis_literal_to_sql(v.value) for v in seq.values)
         if method == "isin":
-            return f"{col_sql} IN ({sql_vals})"
+            return "1=0" if not sql_vals else f"{col_sql} IN ({sql_vals})"
         if method == "notin":
-            return f"{col_sql} NOT IN ({sql_vals})"
+            return "1=1" if not sql_vals else f"{col_sql} NOT IN ({sql_vals})"
         raise TypeError(f"Unsupported ibis method call: {method!r}")
     if t == "Item":
         return _ibis_col_sql(node)
@@ -219,8 +219,14 @@ def predicate_to_sql_where(predicate: ibis.Expr) -> str:
         A SQL string suitable for insertion after ``WHERE``.
 
     Raises:
-        TypeError: If the predicate contains an unsupported node type or operator.
+        TypeError: If the predicate is not a deferred ibis expression or contains
+            an unsupported node type or operator.
     """
+    if not hasattr(predicate, "_resolver"):
+        raise TypeError(
+            "predicate must be a deferred ibis expression built with ibis._, "
+            f"got {type(predicate).__name__!r}"
+        )
     return _ibis_resolver_to_sql(predicate._resolver)  # type: ignore[attr-defined]
 
 
@@ -1357,6 +1363,8 @@ class VastDBVectorStore(VectorStore):
         Returns:
             A SQL expression string computing distance.
         """
+        if not all(math.isfinite(x) for x in query_vec):
+            raise ValueError("query vector contains non-finite values")
         metric = self._resolve_distance_metric()
         vec_literal = f"ARRAY{query_vec}::FLOAT[{dim}]"
         col_cast = f"{vec_col_sql}::FLOAT[{dim}]"

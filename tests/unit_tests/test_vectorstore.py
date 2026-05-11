@@ -903,6 +903,47 @@ def test_predicate_to_sql_where_rejects_non_finite_float():
             predicate_to_sql_where(_["id"] > bad)
 
 
+def test_predicate_to_sql_where_rejects_non_deferred_expr():
+    """P1: passing a concrete ibis expression raises TypeError with a helpful message."""
+    from langchain_vastdb.vectorstores import predicate_to_sql_where
+    import ibis
+    table = ibis.table({"col": "string"}, name="t")
+    with pytest.raises(TypeError, match="deferred ibis expression"):
+        predicate_to_sql_where(table.col == "x")
+
+
+def test_predicate_to_sql_where_isin_empty_list():
+    """P2: isin([]) generates 1=0 (always false) rather than invalid IN ()."""
+    from langchain_vastdb.vectorstores import predicate_to_sql_where
+    sql = predicate_to_sql_where(_["col"].isin([]))
+    assert sql == "1=0"
+
+
+def test_predicate_to_sql_where_notin_empty_list():
+    """P2: notin([]) generates 1=1 (always true) rather than invalid NOT IN ()."""
+    from langchain_vastdb.vectorstores import predicate_to_sql_where
+    sql = predicate_to_sql_where(_["col"].notin([]))
+    assert sql == "1=1"
+
+
+def test_adbc_distance_expr_rejects_non_finite_vector(
+    mock_session, fake_embedding, mock_transaction
+):
+    """P3: _adbc_distance_expr raises ValueError for non-finite query vectors."""
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b",
+        schema="s",
+        table_name="t",
+        distance_metric="l2sq",
+    )
+    store._table_metadata = MagicMock()
+    store._table_metadata._vector_index = None
+    with pytest.raises(ValueError, match="non-finite"):
+        store._adbc_distance_expr('"embedding"', [float("nan"), 0.1], 2)
+
+
 # --- AC3: quoted column identifiers in ADBC SQL ---
 
 
