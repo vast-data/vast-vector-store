@@ -890,14 +890,14 @@ def test_adbc_available_rejects_whitespace_endpoint(mock_session, fake_embedding
 
 def test_predicate_to_sql_where_rejects_unsupported_literal_type():
     """DF-9: Passing a list as an equality literal raises TypeError (use .isin() instead)."""
-    from langchain_vastdb.vectorstores import predicate_to_sql_where
+    from langchain_vastdb._ibis_sql import predicate_to_sql_where
     with pytest.raises(TypeError, match="Unsupported ibis resolver node type"):
         predicate_to_sql_where(_["id"] == [1, 2, 3])
 
 
 def test_predicate_to_sql_where_rejects_non_finite_float():
     """Review-P4: NaN / Inf must not be spliced into SQL literals."""
-    from langchain_vastdb.vectorstores import predicate_to_sql_where
+    from langchain_vastdb._ibis_sql import predicate_to_sql_where
     for bad in (float("nan"), float("inf"), float("-inf")):
         with pytest.raises(ValueError, match="Non-finite"):
             predicate_to_sql_where(_["id"] > bad)
@@ -907,7 +907,7 @@ def test_predicate_to_sql_where_rejects_non_deferred_expr():
     """P1: passing a concrete ibis expression raises TypeError with a helpful message."""
     import ibis
 
-    from langchain_vastdb.vectorstores import predicate_to_sql_where
+    from langchain_vastdb._ibis_sql import predicate_to_sql_where
     table = ibis.table({"col": "string"}, name="t")
     with pytest.raises(TypeError, match="deferred ibis expression"):
         predicate_to_sql_where(table.col == "x")
@@ -915,14 +915,14 @@ def test_predicate_to_sql_where_rejects_non_deferred_expr():
 
 def test_predicate_to_sql_where_isin_empty_list():
     """P2: isin([]) generates 1=0 (always false) rather than invalid IN ()."""
-    from langchain_vastdb.vectorstores import predicate_to_sql_where
+    from langchain_vastdb._ibis_sql import predicate_to_sql_where
     sql = predicate_to_sql_where(_["col"].isin([]))
     assert sql == "1=0"
 
 
 def test_predicate_to_sql_where_notin_empty_list():
     """P2: notin([]) generates 1=1 (always true) rather than invalid NOT IN ()."""
-    from langchain_vastdb.vectorstores import predicate_to_sql_where
+    from langchain_vastdb._ibis_sql import predicate_to_sql_where
     sql = predicate_to_sql_where(_["col"].notin([]))
     assert sql == "1=1"
 
