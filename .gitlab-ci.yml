@@ -26,9 +26,9 @@ variables:
 
 stages:
   - lint
-  - security
   - test
   - integration-test
+  - security
   - sync
   - publish
 
