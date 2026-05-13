@@ -5,6 +5,7 @@ import logging
 import uuid
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pyarrow as pa
 import pytest
 from ibis import _
@@ -553,6 +554,22 @@ def test_similarity_search_by_vector_nan_raises(vectorstore):
 def test_similarity_search_by_vector_inf_raises(vectorstore):
     with pytest.raises(ValueError, match="non-finite"):
         vectorstore.similarity_search_by_vector([0.1, float("inf"), 0.3])
+
+
+def test_similarity_search_by_vector_numpy_array_does_not_raise_truth_value_error(
+    vectorstore, mock_transaction
+):
+    """numpy.ndarray raises 'truth value of array is ambiguous' on `if not arr`."""
+    embedding = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+    mock_transaction.__enter__.return_value.execute.return_value = []
+    vectorstore._vector_search = MagicMock(return_value=[])
+    result = vectorstore.similarity_search_by_vector(embedding)
+    assert result == []
+
+
+def test_similarity_search_by_vector_empty_numpy_raises(vectorstore):
+    with pytest.raises(ValueError, match="non-empty"):
+        vectorstore.similarity_search_by_vector(np.array([]))
 
 
 # --- P6: Duplicate IDs ---

@@ -944,7 +944,7 @@ class VastDBVectorStore(VectorStore):
             raise TypeError(f"k must be an integer, got {type(k).__name__}")
         if k <= 0:
             raise ValueError(f"k must be a positive integer, got {k}")
-        if not embedding:
+        if embedding is None or len(embedding) == 0:
             raise ValueError("query vector must be non-empty")
         if not all(math.isfinite(x) for x in embedding):
             raise ValueError("query vector contains non-finite values")
