@@ -2,8 +2,8 @@
 # Opens an SSH tunnel to the VAST cluster REST API for CI integration tests.
 #
 # Required env vars (set as GitLab CI/CD variables):
-#   AWS_S3_ENDPOINT_URL   — cluster host:port, e.g. "172.27.151.2:443"
-#   VASTDB_SSH_JUMP_HOST      — SSH jump host IP, e.g. "10.141.200.151"
+#   AWS_S3_ENDPOINT_URL   — cluster host:port, e.g. "<cluster-host>:443"
+#   VASTDB_SSH_JUMP_HOST      — SSH jump host IP, e.g. "<jump-host>"
 #   VASTDB_ENDPOINT_USERNAME  — SSH username on jump host
 #   VASTDB_ENDPOINT_PASSWORD  — SSH password on jump host
 #

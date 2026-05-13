@@ -229,7 +229,7 @@ class VastDBVectorStore(VectorStore):
                 is not configured, vector search raises ``RuntimeError`` unless
                 the ``VASTDB_ALLOW_FALLBACK`` env var is set (development only).
             adbc_endpoint: ADBC/QueryEngine endpoint (hostname or IP), e.g.
-                ``"172.27.74.17"`` or ``"query-engine.platform.svc.cluster.local"``.
+                ``"query-engine.example.com"`` or ``"query-engine.platform.svc.cluster.local"``.
                 This is separate from the HTTP REST endpoint.
             access_key: S3-style access key for the ADBC connection. Required
                 when ``adbc_driver_path`` is set.

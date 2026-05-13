@@ -244,7 +244,7 @@ store = VastDBVectorStore(
     schema="my-schema",
     table_name="my-table",
     adbc_driver_path="/usr/lib/libadbc_driver_vastdb.so",
-    adbc_endpoint="172.27.74.17",
+    adbc_endpoint="query-engine.example.com",
     access_key="YOUR_ACCESS_KEY",
     secret_key="YOUR_SECRET_KEY",
 )
