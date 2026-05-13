@@ -11,7 +11,7 @@
 ## Deferred from: code review of story 1-2-configure-gitlab-ci-cd-pipeline (2026-04-09)
 
 - No `workflow:rules` directive to prevent duplicate pipelines -- without top-level workflow rules, pushing to an MR branch may trigger two pipelines (one for push, one for MR). Consider adding workflow:rules when pipeline complexity increases. **→ Story 4-2a**
-- Test stages (lint, unit-test, integration-test) also run on tag pushes alongside publish -- this wastes CI minutes but is not incorrect. Consider adding rules to skip test stages on tag pushes if CI costs become a concern. (Deferred: requires human judgment on team preference.) **→ Story 4-2a**
+- ~~Test stages (lint, unit-test, integration-test) also run on tag pushes alongside publish -- this wastes CI minutes but is not incorrect. Consider adding rules to skip test stages on tag pushes if CI costs become a concern.~~ **RESOLVED** — lint/unit-test/integration-test already have `when: never` on `$CI_COMMIT_TAG`; the publish job comes from the devops CI template and runs alone on tag pushes.
 
 ## Deferred from: code review of story 2-1-constructor-session-management-and-table-access (2026-04-09)
 

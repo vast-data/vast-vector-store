@@ -2,8 +2,8 @@
 # Stages: lint, test (Python matrix), integration-test, publish (PyPI)
 
 # Prevent duplicate pipelines: run on MR events and non-MR pushes to the
-# default branch only. Tag pushes are excluded until story 4-3 introduces
-# the publish job (otherwise GitLab would fail with "no jobs in pipeline").
+# default branch only. Tag pushes trigger the publish job provided by the
+# devops CI template (devops/ci-templates: templates/external-repo.gitlab-ci.yml).
 
 include:
   - project: 'devops/ci-templates'
