@@ -93,7 +93,7 @@ Whole-project sweep covering code, architecture, UX, tests, and docs. Items alre
 ### Docs / packaging inconsistencies
 
 - **PWR-1.** `README.md:80-81` states: *"Credentials are passed directly to `vastdb.connect()` and are **not** stored on the instance."* This contradicts `from_connection_params` at `vectorstores.py:189-199`, which forwards `access_key`/`secret_key` into `__init__` where they are stored as `self._access_key`/`self._secret_key` (documented at `vectorstores.py:116-123`). Either fix the README to match reality, or make `from_connection_params` only retain credentials when `adbc_driver_path` is set (the only consumer). The misleading-test-name item at deferred-work line 76 is adjacent but the README-level contradiction is the user-visible half.
-- **PWR-2.** `README.md:10,21` says `langchain-core >= 0.3`, but `pyproject.toml:27` now pins `langchain-core>=1.0,<2` (resolved during Story 4-2a per deferred-work line 7). README compatibility line is stale — pip will resolve 1.x regardless, so the README misinforms pre-install readers. Single-line fix.
+- ~~**PWR-2.** `README.md:10,21` says `langchain-core >= 0.3`, but `pyproject.toml:27` now pins `langchain-core>=1.0,<2` (resolved during Story 4-2a per deferred-work line 7). README compatibility line is stale — pip will resolve 1.x regardless, so the README misinforms pre-install readers. Single-line fix.~~ **RESOLVED** — both occurrences updated to `>= 1.0, < 2`.
 
 ### Correctness consistency
 
@@ -117,7 +117,7 @@ Whole-project sweep covering code, architecture, UX, tests, and docs. Items alre
 
 ## Deferred from: env var rename (cr_fixes, 2026-05-03)
 
-- **EVR-1.** `README.md` uses wrong `vastdb.connect` kwarg names (`access_key=`, `secret_key=`) in code examples (lines ~44-48, ~89-93). Correct names are `access=`, `secret=`. Pre-existing; not caused by this diff. Fix: search-replace in README.
+- ~~**EVR-1.** `README.md` uses wrong `vastdb.connect` kwarg names (`access_key=`, `secret_key=`) in code examples (lines ~44-48, ~89-93). Correct names are `access=`, `secret=`. Pre-existing; not caused by this diff. Fix: search-replace in README.~~ **RESOLVED** — kwarg names corrected to `access=`/`secret=` in both Quickstart Option 1 and Option 3 examples.
 - **EVR-2.** Empty-string credential (`""`) in `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` silently falls through `or` in `__init__` (lines 202-203) and disables ADBC with a misleading "ADBC not configured" error. Pre-existing `_nonblank()` check in `_adbc_available()` rejects it downstream, but the error message doesn't indicate the credential was found-but-blank. Validate non-blank at construction when `adbc_driver_path` is set.
 - **EVR-3.** `from_connection_params(session=pre_built)` ADBC credential resolution path (env-read in `__init__`) has no unit test coverage. Pre-existing gap from the `session=` param added in a prior story.
 - **EVR-4.** `os.environ.setdefault("VASTDB_ALLOW_FALLBACK", "1")` in `_build_vectorstore` fixture is process-global and never restored. If integration tests ever add fallback-disabled assertions against the real env var (not the mock), they will silently fail. Pre-existing; consider `monkeypatch.setenv` or restore in `finally`.

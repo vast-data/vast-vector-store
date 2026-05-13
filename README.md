@@ -7,7 +7,7 @@ LangChain `VectorStore` interface, enabling similarity search, document storage,
 and retrieval-augmented generation (RAG) workflows backed by VAST Database's
 native vector indexing.
 
-**Compatibility:** Python 3.10 - 3.13 | langchain-core >= 0.3 | vastdb >= 2.0.3
+**Compatibility:** Python 3.10 - 3.13 | langchain-core >= 1.0, < 2 | vastdb >= 2.0.3
 
 **Status:** Alpha (v0.0.1). API may change between minor releases.
 
@@ -18,7 +18,7 @@ native vector indexing.
 - Python 3.10+
 - A running VAST Database cluster with vector index support
 - `vastdb` SDK >= 2.0.3
-- `langchain-core` >= 0.3
+- `langchain-core` >= 1.0, < 2
 - An `Embeddings` model (e.g., OpenAI, HuggingFace, or any LangChain-compatible embeddings)
 
 ## Installation
@@ -43,8 +43,8 @@ from langchain_vastdb import VastDBVectorStore
 
 session = vastdb.connect(
     endpoint="http://vast-cluster:8070",
-    access_key="YOUR_ACCESS_KEY",
-    secret_key="YOUR_SECRET_KEY",
+    access="YOUR_ACCESS_KEY",
+    secret="YOUR_SECRET_KEY",
 )
 
 store = VastDBVectorStore(
@@ -88,8 +88,8 @@ from langchain_vastdb import VastDBVectorStore
 
 session = vastdb.connect(
     endpoint="http://vast-cluster:8070",
-    access_key="YOUR_ACCESS_KEY",
-    secret_key="YOUR_SECRET_KEY",
+    access="YOUR_ACCESS_KEY",
+    secret="YOUR_SECRET_KEY",
 )
 
 store = VastDBVectorStore.from_texts(
