@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "langchain-vastdb"
-version = "0.0.2"
+version = "0.0.3"
 description = "LangChain VectorStore integration for VAST Database"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -49,7 +49,12 @@ exclude = [
     ".github/",
     ".gitlab-ci.yml",
     ".idea/",
+    ".python-version",
     "docs/",
+    "scripts/",
+    "tests/",
+    "conftest.py",
+    ".env.template",
 ]
 
 [tool.hatch.build.targets.wheel]
