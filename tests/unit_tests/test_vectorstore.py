@@ -1983,3 +1983,327 @@ def test_fallback_ip_distance_computation():
     a = [1.0, 2.0, 3.0]
     b = [4.0, 5.0, 6.0]
     assert abs(score_fn(a, b) - (-32.0)) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# Issue 3 remainder: drop_table / table_exists
+# ---------------------------------------------------------------------------
+
+
+def test_table_exists_returns_true_when_table_reachable(mock_session, fake_embedding):
+    """table_exists() returns True when bucket/schema/table all resolve."""
+    mock_tx = MagicMock()
+    cm = MagicMock()
+    cm.__enter__.return_value = mock_tx
+    cm.__exit__.return_value = False
+    mock_session.transaction.return_value = cm
+
+    mock_tx.bucket.return_value.schema.return_value.table.return_value = MagicMock()
+
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b", schema="s", table_name="t",
+    )
+    assert store.table_exists() is True
+
+
+def test_table_exists_returns_false_when_table_missing(mock_session, fake_embedding):
+    """table_exists() returns False when schema.table(fail_if_missing=False) returns None."""
+    mock_tx = MagicMock()
+    cm = MagicMock()
+    cm.__enter__.return_value = mock_tx
+    cm.__exit__.return_value = False
+    mock_session.transaction.return_value = cm
+
+    mock_tx.bucket.return_value.schema.return_value.table.return_value = None
+
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b", schema="s", table_name="t",
+    )
+    assert store.table_exists() is False
+
+
+def test_table_exists_returns_false_when_bucket_missing(mock_session, fake_embedding):
+    """table_exists() returns False when bucket is missing."""
+    import vastdb.errors
+
+    mock_tx = MagicMock()
+    cm = MagicMock()
+    cm.__enter__.return_value = mock_tx
+    cm.__exit__.return_value = False
+    mock_session.transaction.return_value = cm
+
+    mock_tx.bucket.side_effect = vastdb.errors.MissingBucket("b")
+
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b", schema="s", table_name="t",
+    )
+    assert store.table_exists() is False
+
+
+def test_drop_table_calls_drop_on_table(mock_session, fake_embedding):
+    """drop_table() resolves the table and invokes .drop()."""
+    mock_tx = MagicMock()
+    cm = MagicMock()
+    cm.__enter__.return_value = mock_tx
+    cm.__exit__.return_value = False
+    mock_session.transaction.return_value = cm
+
+    mock_table = MagicMock()
+    mock_tx.bucket.return_value.schema.return_value.table.return_value = mock_table
+
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b", schema="s", table_name="t",
+    )
+    store.drop_table()
+    mock_table.drop.assert_called_once()
+
+
+def test_drop_table_missing_ok_swallows_missing_table(mock_session, fake_embedding):
+    """drop_table(missing_ok=True) swallows MissingTable / MissingSchema / MissingBucket."""
+    import vastdb.errors
+
+    mock_tx = MagicMock()
+    cm = MagicMock()
+    cm.__enter__.return_value = mock_tx
+    cm.__exit__.return_value = False
+    mock_session.transaction.return_value = cm
+
+    mock_tx.bucket.return_value.schema.return_value.table.side_effect = (
+        vastdb.errors.MissingTable("b", "s", "t")
+    )
+
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b", schema="s", table_name="t",
+    )
+    store.drop_table(missing_ok=True)  # must not raise
+
+
+def test_drop_table_propagates_missing_when_not_ok(mock_session, fake_embedding):
+    """drop_table(missing_ok=False) re-raises MissingTable."""
+    import vastdb.errors
+
+    mock_tx = MagicMock()
+    cm = MagicMock()
+    cm.__enter__.return_value = mock_tx
+    cm.__exit__.return_value = False
+    mock_session.transaction.return_value = cm
+
+    mock_tx.bucket.return_value.schema.return_value.table.side_effect = (
+        vastdb.errors.MissingTable("b", "s", "t")
+    )
+
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b", schema="s", table_name="t",
+    )
+    with pytest.raises(vastdb.errors.MissingTable):
+        store.drop_table()
+
+
+def test_drop_table_invalidates_metadata_cache(mock_session, fake_embedding):
+    """drop_table clears the cached table metadata so subsequent ops reload."""
+    mock_tx = MagicMock()
+    cm = MagicMock()
+    cm.__enter__.return_value = mock_tx
+    cm.__exit__.return_value = False
+    mock_session.transaction.return_value = cm
+    mock_tx.bucket.return_value.schema.return_value.table.return_value = MagicMock()
+
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b", schema="s", table_name="t",
+    )
+    store._metadata_loaded = True
+    store.drop_table()
+    assert store._metadata_loaded is False
+
+
+# ---------------------------------------------------------------------------
+# Issue 5: count()
+# ---------------------------------------------------------------------------
+
+
+def test_count_without_predicate_uses_table_stats(vectorstore):
+    """count() with no predicate returns table.stats.num_rows directly."""
+    tx = MagicMock()
+    cm = MagicMock()
+    cm.__enter__.return_value = tx
+    cm.__exit__.return_value = False
+    vectorstore._session.transaction.return_value = cm
+
+    table = MagicMock()
+    table.stats.num_rows = 42
+    tx.table_from_metadata.return_value = table
+
+    assert vectorstore.count() == 42
+    table.select.assert_not_called()
+
+
+def test_count_with_predicate_runs_select(vectorstore):
+    """count(predicate) selects id with predicate and returns the read_all().num_rows."""
+    tx = MagicMock()
+    cm = MagicMock()
+    cm.__enter__.return_value = tx
+    cm.__exit__.return_value = False
+    vectorstore._session.transaction.return_value = cm
+
+    table = MagicMock()
+    tx.table_from_metadata.return_value = table
+    rb = pa.RecordBatch.from_pydict({"id": ["a", "b"]})
+    table.select.return_value.read_all.return_value = rb
+
+    assert vectorstore.count(_["id"].isin(["a", "b"])) == 2
+    assert table.select.call_args[1]["columns"] == ["id"]
+
+
+def test_count_reload_stats_when_stats_none(vectorstore):
+    """count() calls reload_stats() when table.stats starts as None."""
+    tx = MagicMock()
+    cm = MagicMock()
+    cm.__enter__.return_value = tx
+    cm.__exit__.return_value = False
+    vectorstore._session.transaction.return_value = cm
+
+    table = MagicMock()
+
+    state = {"stats": None}
+    type(table).stats = property(
+        lambda _self: MagicMock(num_rows=17) if state["stats"] is not None else None
+    )
+
+    def _reload():
+        state["stats"] = MagicMock(num_rows=17)
+    table.reload_stats.side_effect = _reload
+
+    tx.table_from_metadata.return_value = table
+
+    assert vectorstore.count() == 17
+    table.reload_stats.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Issue 2 remainder: per-call ADBC connection overrides
+# ---------------------------------------------------------------------------
+
+
+def test_adbc_db_kwargs_overrides_merged_per_call(
+    mock_session, fake_embedding, mock_transaction
+):
+    """Per-call adbc_db_kwargs_overrides shadow instance-level credentials."""
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b", schema="s", table_name="t",
+        adbc_driver_path="/path/to/driver.so",
+        adbc_endpoint="localhost:8080",
+        access_key="ak",
+        secret_key="sk",
+        distance_metric="l2sq",
+    )
+    store._table_metadata = MagicMock()
+    store._table_metadata._vector_index = None
+    mock_transaction.table_from_metadata.return_value = MagicMock()
+
+    mock_dbapi = MagicMock()
+    cm_conn = mock_dbapi.connect.return_value.__enter__.return_value
+    mock_cursor = cm_conn.cursor.return_value.__enter__.return_value
+    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
+        "id": [], "distance": [],
+    }
+
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
+        store.similarity_search_by_vector(
+            [0.1, 0.2, 0.3],
+            k=4,
+            adbc_db_kwargs_overrides={"vast.db.access_key": "user-ak"},
+        )
+
+    called_db_kwargs = mock_dbapi.connect.call_args[1]["db_kwargs"]
+    assert called_db_kwargs["vast.db.access_key"] == "user-ak"
+    # Other values fall through from the instance.
+    assert called_db_kwargs["vast.db.secret_key"] == "sk"
+    assert called_db_kwargs["vast.db.endpoint"] == "localhost:8080"
+
+
+def test_adbc_conn_kwargs_overrides_merged_per_call(
+    mock_session, fake_embedding, mock_transaction
+):
+    """Per-call adbc_conn_kwargs_overrides merge over instance adbc_conn_kwargs."""
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b", schema="s", table_name="t",
+        adbc_driver_path="/path/to/driver.so",
+        adbc_endpoint="localhost:8080",
+        access_key="ak",
+        secret_key="sk",
+        distance_metric="l2sq",
+        adbc_conn_kwargs={"timeout": 30, "tls": True},
+    )
+    store._table_metadata = MagicMock()
+    store._table_metadata._vector_index = None
+    mock_transaction.table_from_metadata.return_value = MagicMock()
+
+    mock_dbapi = MagicMock()
+    cm_conn = mock_dbapi.connect.return_value.__enter__.return_value
+    mock_cursor = cm_conn.cursor.return_value.__enter__.return_value
+    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
+        "id": [], "distance": [],
+    }
+
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
+        store.similarity_search_by_vector(
+            [0.1, 0.2, 0.3],
+            k=4,
+            adbc_conn_kwargs_overrides={"timeout": 5},
+        )
+
+    conn_kwargs = mock_dbapi.connect.call_args[1]["conn_kwargs"]
+    assert conn_kwargs == {"timeout": 5, "tls": True}
+
+
+def test_unknown_search_kwargs_are_tolerated(
+    mock_session, fake_embedding, mock_transaction
+):
+    """Unknown kwargs on the public search API don't crash; they pass through quietly."""
+    store = VastDBVectorStore(
+        embedding=fake_embedding,
+        session=mock_session,
+        bucket="b", schema="s", table_name="t",
+        adbc_driver_path="/path/to/driver.so",
+        adbc_endpoint="localhost:8080",
+        access_key="ak",
+        secret_key="sk",
+        distance_metric="l2sq",
+    )
+    store._table_metadata = MagicMock()
+    store._table_metadata._vector_index = None
+    mock_transaction.table_from_metadata.return_value = MagicMock()
+
+    mock_dbapi = MagicMock()
+    cm_conn = mock_dbapi.connect.return_value.__enter__.return_value
+    mock_cursor = cm_conn.cursor.return_value.__enter__.return_value
+    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
+        "id": [], "distance": [],
+    }
+
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
+        store.similarity_search_by_vector(
+            [0.1, 0.2, 0.3], k=2, some_unknown_kwarg="ignored",
+        )
+    mock_cursor.execute.assert_called_once()
+
+
+# ---------------------------------------------------------------------------

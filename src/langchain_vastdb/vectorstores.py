@@ -184,6 +184,19 @@ class VastDBVectorStore(VectorStore):
                 schema="my-schema",
                 table_name="my-table",
             )
+
+    Tuning ``k`` per call:
+        ``k`` is a per-call argument, not an instance attribute. To vary it
+        across calls (e.g. retrieval pipelines that compute ``k`` from the
+        query), pass it to each call or use ``as_retriever``::
+
+            store.similarity_search(query, k=12)
+
+            retriever = store.as_retriever(search_kwargs={"k": 12})
+            docs = retriever.invoke(query)
+
+        This replaces the legacy ``store.k = N`` pattern from some other
+        LangChain stores; mutating ``k`` on the instance has no effect here.
     """
 
     _typed_metadata_columns: dict[str, TypedColumn] = {}
@@ -441,6 +454,62 @@ class VastDBVectorStore(VectorStore):
             raise vastdb.errors.TableExists(
                 self._table_ref.bucket, self._table_ref.schema, self._table_ref.table
             )
+
+    def table_exists(self) -> bool:
+        """Return ``True`` when the configured bucket/schema/table is reachable.
+
+        Returns ``False`` if any of the bucket, schema, or table is missing.
+        Other VastDB errors (auth, network) propagate.
+        """
+        with self._session.transaction() as tx:
+            try:
+                bucket_obj = tx.bucket(self._table_ref.bucket)
+            except vastdb.errors.MissingBucket:
+                return False
+            try:
+                schema_obj = bucket_obj.schema(
+                    self._table_ref.schema, fail_if_missing=False
+                )
+            except TypeError:
+                # Older SDKs may not support fail_if_missing — fall back to catch.
+                try:
+                    schema_obj = bucket_obj.schema(self._table_ref.schema)
+                except vastdb.errors.MissingSchema:
+                    return False
+            if schema_obj is None:
+                return False
+            try:
+                tbl = schema_obj.table(self._table_ref.table, fail_if_missing=False)
+            except TypeError:
+                try:
+                    tbl = schema_obj.table(self._table_ref.table)
+                except vastdb.errors.MissingTable:
+                    return False
+            return tbl is not None
+
+    def drop_table(self, *, missing_ok: bool = False) -> None:
+        """Drop the configured table.
+
+        Args:
+            missing_ok: When ``True``, silently succeed if the bucket, schema,
+                or table does not exist. When ``False`` (default), propagate
+                the underlying ``vastdb.errors.MissingTable`` /
+                ``MissingSchema`` / ``MissingBucket``.
+        """
+        with self._session.transaction() as tx:
+            try:
+                bucket_obj = tx.bucket(self._table_ref.bucket)
+                schema_obj = bucket_obj.schema(self._table_ref.schema)
+                table_obj = schema_obj.table(self._table_ref.table)
+                table_obj.drop()
+            except (
+                vastdb.errors.MissingBucket,
+                vastdb.errors.MissingSchema,
+                vastdb.errors.MissingTable,
+            ):
+                if not missing_ok:
+                    raise
+        self.invalidate_table_cache()
 
     @classmethod
     def build_with_table(
@@ -859,7 +928,12 @@ class VastDBVectorStore(VectorStore):
             predicate: Optional ibis deferred filter expression, e.g.
                 ``ibis._["category"] == "news"`` or
                 ``(ibis._["level"] == "advanced") & (ibis._["score"] > 0.9)``.
-            **kwargs: Additional keyword arguments forwarded to the search hooks.
+            **kwargs: Forwarded to ``_vector_search`` / ``_do_vector_search_adbc``
+                / ``_open_adbc_connection`` / ``_build_adbc_where_clause``. The
+                base ``_open_adbc_connection`` recognises
+                ``adbc_db_kwargs_overrides`` and ``adbc_conn_kwargs_overrides``
+                for per-call identity injection (e.g. row-level-security).
+                Unknown kwargs are tolerated by all hooks in the default chain.
 
         Returns:
             List of Documents most similar to the query.
@@ -876,7 +950,7 @@ class VastDBVectorStore(VectorStore):
         query_vector = self._embedding.embed_query(query)
         if not all(math.isfinite(x) for x in query_vector):
             raise ValueError("query vector contains non-finite values")
-        results = self._vector_search(query_vector, k, predicate=predicate)
+        results = self._vector_search(query_vector, k, predicate=predicate, **kwargs)
         return [self._row_to_document(row) for row, _ in results]
 
     def similarity_search_with_score(
@@ -893,7 +967,12 @@ class VastDBVectorStore(VectorStore):
             query: The text query to search for.
             k: Number of results to return.
             predicate: Optional ibis deferred filter expression.
-            **kwargs: Additional keyword arguments forwarded to the search hooks.
+            **kwargs: Forwarded to ``_vector_search`` / ``_do_vector_search_adbc``
+                / ``_open_adbc_connection`` / ``_build_adbc_where_clause``. The
+                base ``_open_adbc_connection`` recognises
+                ``adbc_db_kwargs_overrides`` and ``adbc_conn_kwargs_overrides``
+                for per-call identity injection (e.g. row-level-security).
+                Unknown kwargs are tolerated by all hooks in the default chain.
 
         Returns:
             List of (Document, distance_score) tuples, ordered by similarity.
@@ -910,7 +989,7 @@ class VastDBVectorStore(VectorStore):
         query_vector = self._embedding.embed_query(query)
         if not all(math.isfinite(x) for x in query_vector):
             raise ValueError("query vector contains non-finite values")
-        results = self._vector_search(query_vector, k, predicate=predicate)
+        results = self._vector_search(query_vector, k, predicate=predicate, **kwargs)
         return [(self._row_to_document(row, score), score) for row, score in results]
 
     def similarity_search_by_vector(
@@ -930,7 +1009,12 @@ class VastDBVectorStore(VectorStore):
             embedding: The pre-computed query embedding vector.
             k: Number of results to return.
             predicate: Optional ibis deferred filter expression.
-            **kwargs: Additional keyword arguments forwarded to the search hooks.
+            **kwargs: Forwarded to ``_vector_search`` / ``_do_vector_search_adbc``
+                / ``_open_adbc_connection`` / ``_build_adbc_where_clause``. The
+                base ``_open_adbc_connection`` recognises
+                ``adbc_db_kwargs_overrides`` and ``adbc_conn_kwargs_overrides``
+                for per-call identity injection (e.g. row-level-security).
+                Unknown kwargs are tolerated by all hooks in the default chain.
 
         Returns:
             List of Documents most similar to the embedding.
@@ -948,7 +1032,7 @@ class VastDBVectorStore(VectorStore):
             raise ValueError("query vector must be non-empty")
         if not all(math.isfinite(x) for x in embedding):
             raise ValueError("query vector contains non-finite values")
-        results = self._vector_search(embedding, k, predicate=predicate)
+        results = self._vector_search(embedding, k, predicate=predicate, **kwargs)
         return [self._row_to_document(row) for row, _ in results]
 
     def delete(self, ids: list[str] | None = None, **kwargs: Any) -> bool | None:
@@ -1056,6 +1140,32 @@ class VastDBVectorStore(VectorStore):
             table = self._get_table(active_tx)
             reader = table.select(columns=columns, predicate=predicate)
             return reader.read_all().to_pylist()
+
+    def count(
+        self,
+        predicate: ibis.Expr | None = None,
+    ) -> int:
+        """Return the number of rows matching *predicate*.
+
+        When *predicate* is ``None``, returns the total row count via
+        ``ITable.stats.num_rows`` (one round trip, no scan). When a predicate
+        is supplied, performs a SELECT of the id column and counts the
+        returned rows.
+
+        Args:
+            predicate: Optional ``ibis._`` deferred predicate.
+
+        Returns:
+            The row count.
+        """
+        with self._session.transaction() as tx:
+            table = self._get_table(tx)
+            if predicate is None:
+                if table.stats is None:
+                    table.reload_stats()
+                return table.stats.num_rows if table.stats is not None else 0
+            reader = table.select(columns=[self._id_column], predicate=predicate)
+            return reader.read_all().num_rows
 
     def _adbc_available(self) -> bool:
         """Return True when all four ADBC parameters are configured and non-blank."""
@@ -1183,26 +1293,50 @@ class VastDBVectorStore(VectorStore):
         return self._do_vector_search_fallback(tx, query_vector, k, columns, predicate)
 
     @contextmanager
-    def _open_adbc_connection(self):
+    def _open_adbc_connection(self, **kwargs: Any):
         """Yield an open ADBC connection.
 
         Override this hook to customise driver, db_kwargs, or conn_kwargs —
         for example to inject per-request credentials or impersonation headers.
+
+        Keyword arguments forwarded from the public search methods are made
+        available here so subclasses can apply per-call identity without
+        retaining mutable state on the instance. The base implementation
+        recognises two reserved kwargs:
+
+        - ``adbc_db_kwargs_overrides``: ``dict`` merged on top of the static
+          ``vast.db.*`` credentials (e.g. ``{"vast.db.access_key": ...}``).
+        - ``adbc_conn_kwargs_overrides``: ``dict`` merged on top of the
+          per-instance ``adbc_conn_kwargs``.
+
+        Unknown kwargs are ignored so they can be consumed by other hooks
+        (e.g. ``_build_adbc_where_clause``) in the same forwarding chain.
+
+        Args:
+            **kwargs: Keyword arguments propagated from
+                ``similarity_search``/``_vector_search``/``_do_vector_search_adbc``.
         """
         adbc_dbapi = _get_adbc_dbapi()
 
-        db_kwargs = {
+        db_kwargs: dict[str, Any] = {
             "vast.db.endpoint": self._adbc_endpoint,
             "vast.db.access_key": self._access_key,
             "vast.db.secret_key": self._secret_key,
         }
+        db_overrides = kwargs.get("adbc_db_kwargs_overrides")
+        if db_overrides:
+            db_kwargs.update(db_overrides)
 
         connect_kwargs: dict[str, Any] = {
             "driver": self._adbc_driver_path,
             "db_kwargs": db_kwargs,
         }
-        if self._adbc_conn_kwargs:
-            connect_kwargs["conn_kwargs"] = self._adbc_conn_kwargs
+        conn_kwargs: dict[str, Any] = dict(self._adbc_conn_kwargs or {})
+        conn_overrides = kwargs.get("adbc_conn_kwargs_overrides")
+        if conn_overrides:
+            conn_kwargs.update(conn_overrides)
+        if conn_kwargs:
+            connect_kwargs["conn_kwargs"] = conn_kwargs
 
         with adbc_dbapi.connect(**connect_kwargs) as conn:
             yield conn
@@ -1334,7 +1468,7 @@ class VastDBVectorStore(VectorStore):
             f"ORDER BY distance "
             f"LIMIT {k}"
         )
-        with self._open_adbc_connection() as conn:
+        with self._open_adbc_connection(**kwargs) as conn:
             with conn.cursor() as cursor:
                 cursor.execute(query)
                 result = cursor.fetch_arrow_table().to_pydict()
