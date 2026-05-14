@@ -493,7 +493,7 @@ wheels = [
 
 [[package]]
 name = "langchain-vastdb"
-version = "0.0.3"
+version = "0.0.4"
 source = { editable = "." }
 dependencies = [
     { name = "ibis-framework" },
