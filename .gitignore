@@ -1,6 +1,14 @@
 /.idea/*
 /.claude/settings.local.json
 
+# macOS
+.DS_Store
+
+# Dev tools
+.benchmarks/
+.cadence/
+.uv-cache/
+
 # Python
 __pycache__/
 *.py[cod]

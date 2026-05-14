@@ -43,17 +43,23 @@ dev = [
 exclude = [
     "_bmad/",
     "_bmad-output/",
+    ".benchmarks/",
+    ".cadence/",
     ".claude/",
     ".cursor/",
+    ".gitignore",
     ".opencode/",
     ".github/",
     ".gitlab-ci.yml",
     ".idea/",
     ".python-version",
+    ".uv-cache/",
     "docs/",
+    "examples/",
     "scripts/",
     "tests/",
     "conftest.py",
+    "Taskfile.yml",
     ".env.template",
 ]
 
