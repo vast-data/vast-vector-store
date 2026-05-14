@@ -463,28 +463,17 @@ class VastDBVectorStore(VectorStore):
         """
         with self._session.transaction() as tx:
             try:
-                bucket_obj = tx.bucket(self._table_ref.bucket)
-            except vastdb.errors.MissingBucket:
-                return False
-            try:
-                schema_obj = bucket_obj.schema(
-                    self._table_ref.schema, fail_if_missing=False
+                tbl = (
+                    tx.bucket(self._table_ref.bucket)
+                    .schema(self._table_ref.schema)
+                    .table(self._table_ref.table)
                 )
-            except TypeError:
-                # Older SDKs may not support fail_if_missing — fall back to catch.
-                try:
-                    schema_obj = bucket_obj.schema(self._table_ref.schema)
-                except vastdb.errors.MissingSchema:
-                    return False
-            if schema_obj is None:
+            except (
+                vastdb.errors.MissingBucket,
+                vastdb.errors.MissingSchema,
+                vastdb.errors.MissingTable,
+            ):
                 return False
-            try:
-                tbl = schema_obj.table(self._table_ref.table, fail_if_missing=False)
-            except TypeError:
-                try:
-                    tbl = schema_obj.table(self._table_ref.table)
-                except vastdb.errors.MissingTable:
-                    return False
             return tbl is not None
 
     def drop_table(self, *, missing_ok: bool = False) -> None:
@@ -1152,6 +1141,12 @@ class VastDBVectorStore(VectorStore):
         is supplied, performs a SELECT of the id column and counts the
         returned rows.
 
+        .. warning::
+            Supplying a predicate performs a full scan of matching rows to
+            count them (``read_all().num_rows``). For large tables this can
+            materialise millions of rows into memory. Use with care and
+            consider adding an explicit limit in your calling code.
+
         Args:
             predicate: Optional ``ibis._`` deferred predicate.
 
@@ -1163,7 +1158,13 @@ class VastDBVectorStore(VectorStore):
             if predicate is None:
                 if table.stats is None:
                     table.reload_stats()
-                return table.stats.num_rows if table.stats is not None else 0
+                if table.stats is None:
+                    raise RuntimeError(
+                        "Table stats unavailable after reload — cannot determine row "
+                        "count without a full scan. Pass a predicate (even an "
+                        "always-true one) to perform an explicit scan."
+                    )
+                return table.stats.num_rows
             reader = table.select(columns=[self._id_column], predicate=predicate)
             return reader.read_all().num_rows
 
@@ -1239,6 +1240,9 @@ class VastDBVectorStore(VectorStore):
                 SDK for the fallback path.
             **kwargs: Additional keyword arguments forwarded to
                 ``_do_vector_search_adbc`` and ``_build_adbc_where_clause``.
+                These are **not** forwarded to ``_do_vector_search_fallback``
+                because the fallback path does not use ADBC; per-call identity
+                overrides (``adbc_*_overrides``) have no effect on the fallback.
 
         Returns:
             List of (row_dict, distance_score) tuples.
