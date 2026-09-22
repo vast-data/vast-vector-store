@@ -23,7 +23,12 @@ htmlcov/
 .env
 
 # Coding agents
+/.agents/
 /.claude/
 /.cursor/
 /.github/
 /.opencode/
+
+# Bmad stuff
+/_bmad/
+/_bmad-output/
