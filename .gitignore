@@ -28,6 +28,8 @@ htmlcov/
 /.cursor/
 /.github/
 /.opencode/
+/CLAUDE.*
+
 
 # Bmad stuff
 /_bmad/
