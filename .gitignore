@@ -21,3 +21,9 @@ build/
 .coverage
 htmlcov/
 .env
+
+# Coding agents
+/.claude/
+/.cursor/
+/.github/
+/.opencode/
