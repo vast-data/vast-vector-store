@@ -944,6 +944,22 @@ def test_predicate_to_sql_where_notin_empty_list():
     assert sql == "1=1"
 
 
+@pytest.mark.parametrize(
+    ("predicate", "expected"),
+    [
+        (_["col"].isin(["a", "b"]), '("col" = \'a\' OR "col" = \'b\')'),
+        (_["col"].notin(["a", "b"]), '("col" != \'a\' AND "col" != \'b\')'),
+        (_["col"].isin(["it's"]), '("col" = \'it\'\'s\')'),
+    ],
+)
+def test_predicate_membership_uses_escaped_comparisons(predicate, expected):
+    from langchain_vastdb._ibis_sql import predicate_to_sql_where
+
+    sql = predicate_to_sql_where(predicate)
+    assert sql == expected
+    assert " IN (" not in sql
+
+
 def test_adbc_distance_expr_rejects_non_finite_vector(
     mock_session, fake_embedding, mock_transaction
 ):

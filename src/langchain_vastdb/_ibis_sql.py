@@ -80,11 +80,11 @@ def _ibis_resolver_to_sql(node: object) -> str:
         method: str = node.func.name.value  # type: ignore[attr-defined]  # Attr.name is a Just
         col_sql = _ibis_col_sql(node.func.obj)  # type: ignore[attr-defined]  # Attr.obj is an Item
         seq = node.args[0]  # type: ignore[attr-defined]  # Sequence node
-        sql_vals = ", ".join(_ibis_literal_to_sql(v.value) for v in seq.values)
+        sql_vals = [_ibis_literal_to_sql(v.value) for v in seq.values]
         if method == "isin":
-            return "1=0" if not sql_vals else f"{col_sql} IN ({sql_vals})"
+            return "1=0" if not sql_vals else "(" + " OR ".join(f"{col_sql} = {v}" for v in sql_vals) + ")"
         if method == "notin":
-            return "1=1" if not sql_vals else f"{col_sql} NOT IN ({sql_vals})"
+            return "1=1" if not sql_vals else "(" + " AND ".join(f"{col_sql} != {v}" for v in sql_vals) + ")"
         raise TypeError(f"Unsupported ibis method call: {method!r}")
     if t == "Item":
         return _ibis_col_sql(node)
@@ -97,7 +97,8 @@ def predicate_to_sql_where(predicate: ibis.Expr) -> str:
     """Convert an ``ibis._`` deferred predicate to a SQL WHERE fragment (no leading WHERE).
 
     Supports: ``==``, ``!=``, ``<``, ``<=``, ``>``, ``>=``, ``&`` (AND),
-    ``|`` (OR), ``~`` (NOT), ``.isin()``, ``.notin()``.
+    ``|`` (OR), ``~`` (NOT), ``.isin()`` (OR equality chain), and
+    ``.notin()`` (AND inequality chain).
 
     Args:
         predicate: An ibis deferred filter expression built with ``ibis._``.
