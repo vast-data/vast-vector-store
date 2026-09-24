@@ -45,7 +45,8 @@ only overrides the **hook methods** that customize storage behavior.
 | *(metadata layout)* | `_build_metadata_columns()` | Define column layout for metadata storage |
 | `similarity_search()` / `similarity_search_by_vector()` | `_vector_search()` | Execute the vector similarity query |
 | `delete()` | `_delete_by_ids()` | Delete rows by document ID |
-| `get_by_ids()` | `_get_by_ids()` | Retrieve rows by document ID |
+| `get_by_ids()` | `_get_by_ids()` | Retrieve rows by document ID (not called by ADBC search) |
+| *(search columns)* | `_select_columns()` / `_typed_metadata_columns` | Select full document columns projected by search |
 | *(result conversion)* | `_row_to_document()` | Convert a VastDB row dict to a `Document` |
 
 Move the storage logic from your old interface methods into the matching hook.
@@ -95,8 +96,8 @@ def _vector_search(
     k: int,
     predicate: ibis.Expr | None = None,
     *,
-    filter_dict: dict | None = None,
     tx: Transaction | None = None,
+    **kwargs: Any,
 ) -> list[tuple[dict, float]]: ...
 
 def _delete_by_ids(
@@ -121,7 +122,12 @@ def _row_to_document(
 ```
 
 The optional `tx` parameter lets your hook reuse an existing transaction
-(e.g., for atomic upsert). If `tx` is `None`, the hook opens its own.
+(e.g., for atomic upsert). If `tx` is `None`, the hook opens its own. With
+ADBC configured, search projects `_select_columns()` directly and does not
+call `_get_by_ids()`. Prefer `_typed_metadata_columns` or `_select_columns()`
+to customize search columns. Overrides of `_open_adbc_connection` must accept
+`**kwargs` so `adbc_conn_kwargs_overrides` can pass the SDK transaction ID to
+Query Engine lookup/delete.
 
 ## Step 3: Delete inherited interface methods
 

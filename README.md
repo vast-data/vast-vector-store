@@ -7,7 +7,7 @@ LangChain `VectorStore` interface, enabling similarity search, document storage,
 and retrieval-augmented generation (RAG) workflows backed by VAST Database's
 native vector indexing.
 
-**Compatibility:** Python 3.10 - 3.13 | langchain-core >= 1.0, < 2 | vastdb >= 2.0.3
+**Compatibility:** Python 3.10 - 3.13 | langchain-core >= 1.0, < 2 | vastdb >= 2.0.3 | Query Engine paths require VAST 5.4+
 
 **Status:** Alpha (v0.0.1). API may change between minor releases.
 
@@ -16,7 +16,9 @@ native vector indexing.
 ## Requirements
 
 - Python 3.10+
-- A running VAST Database cluster with vector index support
+- A running VAST Database cluster; Query Engine operations require VAST 5.4+.
+  VAST 5.4 uses brute-force search (not live-tested here; delete is unverified);
+  VAST 5.5 uses a vector index when present. VAST 5.3 has no Query Engine.
 - `vastdb` SDK >= 2.0.3
 - `langchain-core` >= 1.0, < 2
 - An `Embeddings` model (e.g., OpenAI, HuggingFace, or any LangChain-compatible embeddings)
@@ -187,8 +189,8 @@ store.invalidate_table_cache()
 | `text_column` | `str` | `"text"` | Column name for document text. |
 | `vector_column` | `str` | `"vector"` | Column name for embedding vectors. |
 | `metadata_column` | `str` | `"metadata"` | Column name for document metadata (stored as JSON). |
-| `adbc_driver_path` | `str \| None` | `None` | Path to `libadbc_driver_vastdb.so`. Enables native ADBC vector search via `array_distance()` SQL. |
-| `adbc_endpoint` | `str \| None` | `None` | ADBC/QueryEngine endpoint (hostname or IP). Separate from the HTTP REST endpoint. |
+| `adbc_driver_path` | `str \| None` | `None` | Path to `libadbc_driver_vastdb.so`. Enables Query Engine search, lookup and delete. |
+| `adbc_endpoint` | `str \| None` | `None` | Full Query Engine URL (e.g. `http://host:80`), separate from the SDK endpoint. |
 | `access_key` | `str \| None` | `None` | Access key for ADBC connection. |
 | `secret_key` | `str \| None` | `None` | Secret key for ADBC connection. |
 
@@ -229,12 +231,19 @@ connection parameters.
 | `adbc_endpoint` | `str \| None` | `None` | ADBC/QueryEngine endpoint. |
 | `**kwargs` | | | Additional keyword arguments forwarded to the constructor (e.g., custom column names). |
 
-### ADBC vector search
+### ADBC Query Engine operations
 
-When `adbc_driver_path` and `adbc_endpoint` are both provided, the store uses
-native ADBC SQL with `array_distance()` for server-side vector search. This does
-not require a vector index on the table. If ADBC is unavailable or fails, the
-store falls back to an in-memory L2Sq distance scan.
+With the ADBC driver, endpoint and credentials configured, vector search fetches
+ranked documents in one Query Engine SQL query. `get_by_ids` and delete also
+use the Query Engine; upsert joins the SQL delete and SDK Arrow insert in one
+transaction. Insertion remains SDK Arrow. A vector index is optional (VAST 5.4
+uses brute-force search; 5.5 uses the index when present). Without ADBC,
+lookup and delete retain their SDK paths. Search falls back to an in-memory
+scan only when `VASTDB_ALLOW_FALLBACK=1` is set, including on ADBC errors.
+
+Unfiltered `count()` uses cached table stats, which may lag recent writes or
+over-count while a table settles. Use `count(predicate)` for an exact count;
+it scans matching IDs rather than using Query Engine `COUNT(*)`.
 
 ```python
 store = VastDBVectorStore(
@@ -244,7 +253,7 @@ store = VastDBVectorStore(
     schema="my-schema",
     table_name="my-table",
     adbc_driver_path="/usr/lib/libadbc_driver_vastdb.so",
-    adbc_endpoint="query-engine.example.com",
+    adbc_endpoint="http://query-engine.example.com:80",
     access_key="YOUR_ACCESS_KEY",
     secret_key="YOUR_SECRET_KEY",
 )
@@ -264,10 +273,10 @@ full LangChain interface.
 |------|---------|---------|
 | `_insert_vectors` | Customize record insertion | `list[str]` (IDs) |
 | `_build_metadata_columns` | Customize column layout for metadata | `dict[str, list]` |
-| `_select_columns` | Customize columns retrieved during search | `list[str]` |
+| `_select_columns` / `_typed_metadata_columns` | Customize document columns projected during search and lookup | `list[str]` / mapping |
 | `_vector_search` | Customize similarity search | `list[tuple[dict, float]]` |
 | `_delete_by_ids` | Customize document deletion | `bool` |
-| `_get_by_ids` | Customize document retrieval | `list[dict]` |
+| `_get_by_ids` | Customize ID lookup (not used by ADBC search) | `list[dict]` |
 | `_row_to_document` | Customize row-to-Document conversion | `Document` |
 
 ### Hook signatures
@@ -289,8 +298,8 @@ def _vector_search(
     k: int,
     predicate: ibis.Expr | None = None,
     *,
-    filter_dict: dict | None = None,
     tx: Transaction | None = None,
+    **kwargs: Any,
 ) -> list[tuple[dict, float]]: ...
 
 def _delete_by_ids(
@@ -314,11 +323,15 @@ def _row_to_document(
 ) -> Document: ...
 ```
 
+Override `_open_adbc_connection(self, **kwargs)` with `**kwargs` even if your
+subclass currently ignores them: joined operations pass
+`adbc_conn_kwargs_overrides={"vast.db.external_txid": str(tx.txid)}`.
+
 ### Transaction reuse
 
-Each hook opens and closes its own transaction by default. The optional `tx`
-parameter lets subclasses pass in an existing transaction for multi-step atomic
-operations:
+Write hooks open a transaction by default. The optional `tx` parameter lets
+subclasses pass in an existing transaction for multi-step atomic operations
+(ADBC delete joins it):
 
 ```python
 with self._session.transaction() as tx:
