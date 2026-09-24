@@ -187,10 +187,16 @@ class VastDBVectorStore(VectorStore):
     - ``_build_metadata_columns`` — customize column layout for metadata storage
     - ``_vector_search`` — customize similarity search behavior
     - ``_delete_by_ids`` — customize document deletion
-    - ``_get_by_ids`` — customize document retrieval by ID
+    - ``_get_by_ids`` — customize document retrieval by ID (not called by ADBC search)
     - ``_row_to_document`` — customize row-to-Document conversion
-    - ``_select_columns`` — customize columns for full-row retrieval
+    - ``_select_columns`` — customize projected search and lookup columns
     - ``_get_table`` — customize table acquisition (e.g., create-on-first-use, table-level options)
+
+    Overrides of ``_open_adbc_connection`` should accept ``**kwargs``: search
+    forwards per-call options, and joined delete/lookups pass the SDK transaction
+    ID through ``adbc_conn_kwargs_overrides``. With ADBC configured, search,
+    lookup, and delete use Query Engine SQL; upsert deletes and SDK Arrow inserts
+    within one transaction. Without ADBC, the existing SDK paths remain.
 
     Example:
         .. code-block:: python
@@ -712,7 +718,7 @@ class VastDBVectorStore(VectorStore):
     def _select_columns(self) -> list[str]:
         """Return column names for full-row retrieval (excludes vectors).
 
-        Used by ``_vector_search`` and ``_get_by_ids`` to determine which
+        Used by one-query ADBC search and ``_get_by_ids`` to determine which
         columns to SELECT when fetching document data.
 
         When ``_typed_metadata_columns`` is set, returns
@@ -1145,7 +1151,7 @@ class VastDBVectorStore(VectorStore):
         custom post-processing.
 
         Args:
-            ids: Non-empty list of document IDs to retrieve.
+            ids: Document IDs to retrieve; an empty list returns no rows.
             tx: Optional active transaction. If provided it is reused;
                 otherwise a new transaction is opened.
 
@@ -1196,16 +1202,13 @@ class VastDBVectorStore(VectorStore):
     ) -> int:
         """Return the number of rows matching *predicate*.
 
-        When *predicate* is ``None``, returns the total row count via
-        ``ITable.stats.num_rows`` (one round trip, no scan). When a predicate
-        is supplied, performs a SELECT of the id column and counts the
-        returned rows.
+        Without a predicate, returns cached ``ITable.stats.num_rows`` rather
+        than an exact count. Stats may lag writes or temporarily over-count
+        while the table settles. Pass a predicate for an exact SDK SELECT count.
 
         .. warning::
-            Supplying a predicate performs a full scan of matching rows to
-            count them (``read_all().num_rows``). For large tables this can
-            materialise millions of rows into memory. Use with care and
-            consider adding an explicit limit in your calling code.
+            Supplying a predicate scans matching IDs and materialises them in
+            memory (``read_all().num_rows``). Use with care on large tables.
 
         Args:
             predicate: Optional ``ibis._`` deferred predicate.
