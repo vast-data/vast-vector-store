@@ -1152,12 +1152,13 @@ class VastDBVectorStore(VectorStore):
 
         Args:
             ids: Document IDs to retrieve; an empty list returns no rows.
-            tx: Optional active transaction. If provided it is reused;
-                otherwise a new transaction is opened.
+            tx: Optional active transaction. ADBC joins it via
+                ``vast.db.external_txid``; without it, ADBC opens a plain
+                connection. The SDK path opens a transaction when absent.
 
         Returns:
-            List of row dicts. Each dict contains the id, text, and metadata
-            columns for a matched document.
+            List of row dicts with ``_select_columns()`` columns for each
+            match, including typed columns when configured.
         """
         columns = self._select_columns()
         if self._adbc_available():
