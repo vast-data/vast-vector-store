@@ -1289,15 +1289,6 @@ class VastDBVectorStore(VectorStore):
                     type(exc).__name__,
                     exc,
                 )
-            except Exception as exc:
-                if not _fallback_allowed():
-                    raise
-                _logger.warning(
-                    "ADBC vector search step-2 SDK call failed (%s: %s); "
-                    "falling back to in-memory L2Sq scan.",
-                    type(exc).__name__,
-                    exc,
-                )
         elif not _fallback_allowed():
             raise RuntimeError(
                 "ADBC is not configured. Vector search requires a Query Engine "
@@ -1438,72 +1429,45 @@ class VastDBVectorStore(VectorStore):
         predicate: ibis.Expr | None,
         **kwargs: Any,
     ) -> list[tuple[dict, float]]:
-        """ADBC vector search using ``array_distance()`` SQL (no index needed).
-
-        Mirrors the approach used in vast-pipelines: step 1 fetches only
-        ``id + distance`` via ADBC SQL (lightweight), step 2 retrieves the
-        full document columns for the top-k IDs via the VastDB SDK.
+        """Fetch ranked document columns and distance in one ADBC query.
 
         Args:
-            tx: An active VastDB transaction (used for step-2 row fetch).
+            tx: Active SDK transaction retained for hook compatibility; unused by ADBC.
             query_vector: The query embedding vector.
             k: Maximum number of results.
-            predicate: Optional ibis predicate converted to a SQL WHERE clause
-                via ``_build_adbc_where_clause``.
-            **kwargs: Additional keyword arguments forwarded to
-                ``_build_adbc_where_clause``.
+            predicate: Optional ibis predicate converted via ``_build_adbc_where_clause``.
+            **kwargs: Forwarded to the WHERE and connection hooks.
 
         Returns:
             List of (row_dict, distance_score) tuples ordered by distance.
         """
-        dim = len(query_vector)
-        table_path = self._adbc_table_path()
-
-        # Build WHERE clause via the protected hook (overridable by subclasses).
         where_body = self._build_adbc_where_clause(predicate, **kwargs)
         where_clause = f"WHERE {where_body}" if where_body else ""
-
-        # Step 1: ADBC SQL — fetch id + distance only (no heavy columns).
-        # Cast to plain float to avoid np.float64(...) in the SQL literal.
         float_vec = [float(x) for x in query_vector]
-        # Quote all column identifiers to avoid SQL keyword conflicts.
-        quoted_id_col = _quote_ident(self._id_column)
-        quoted_vec_col = _quote_ident(self._vector_column)
-        distance_expr = self._adbc_distance_expr(quoted_vec_col, float_vec, dim)
+        distance_expr = self._adbc_distance_expr(
+            _quote_ident(self._vector_column), float_vec, len(query_vector)
+        )
+        alias = _quote_ident(_ADBC_DISTANCE_ALIAS)
+        columns = ", ".join(map(_quote_ident, self._select_columns()))
         query = (
-            f"SELECT {quoted_id_col}, "
-            f"{distance_expr} AS distance "
-            f"FROM {table_path} "
-            f"{where_clause} "
-            f"ORDER BY distance "
-            f"LIMIT {k}"
+            f"SELECT {columns}, {distance_expr} AS {alias} "
+            f"FROM {self._adbc_table_path()} {where_clause} "
+            f"ORDER BY {alias} LIMIT {k}"
         )
         with self._open_adbc_connection(**kwargs) as conn:
             with conn.cursor() as cursor:
                 cursor.execute(query)
-                result = cursor.fetch_arrow_table().to_pydict()
+                rows = cursor.fetch_arrow_table().to_pylist()
 
-        ids: list[str] = result.get(self._id_column, [])
-        distances: list[float] = result.get("distance", [])
-        if not ids:
-            return []
-
-        # Step 2: SDK — fetch full rows for the top-k IDs.
+        ids = [row[self._id_column] for row in rows]
         if len(ids) != len(set(ids)):
             _logger.warning(
-                "ADBC step-1 returned %d IDs but only %d are unique; "
-                "duplicate IDs collapsed — results may be fewer than k.",
+                "ADBC vector search returned %d IDs but only %d are unique; "
+                "duplicate IDs returned as-is.",
                 len(ids),
                 len(set(ids)),
             )
-        score_by_id = dict(zip(ids, distances))
-        full_rows = self._get_by_ids(ids, tx=tx)
-        row_by_id = {row[self._id_column]: row for row in full_rows}
-        return [
-            (row_by_id[id_], score_by_id[id_])
-            for id_ in ids
-            if id_ in row_by_id
-        ]
+        return [(row, float(row.pop(_ADBC_DISTANCE_ALIAS))) for row in rows]
 
     def _do_vector_search_fallback(
         self,

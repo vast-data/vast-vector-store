@@ -611,6 +611,47 @@ def adbc_vectorstore(mock_session, fake_embedding, mock_transaction):
     return store
 
 
+@pytest.mark.parametrize(
+    "method",
+    [
+        "similarity_search", "similarity_search_with_score",
+        "similarity_search_by_vector", "retriever",
+    ],
+)
+def test_adbc_search_projects_document_in_one_query(adbc_vectorstore, mock_transaction, method):
+    adbc_vectorstore._typed_metadata_columns = {
+        "distance": TypedColumn(), "category": TypedColumn(),
+    }
+    cursor = MagicMock()
+    cursor.fetch_arrow_table.return_value.to_pylist.return_value = [
+        {"id": "x", "text": "hello", "distance": 7, "category": "news",
+         "metadata": "{}", "_vastdb_distance": 0.25}
+    ]
+    dbapi = MagicMock()
+    conn = dbapi.connect.return_value.__enter__.return_value
+    conn.cursor.return_value.__enter__.return_value = cursor
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi), patch.object(
+        adbc_vectorstore, "_get_by_ids"
+    ) as get_rows:
+        if method == "retriever":
+            results = adbc_vectorstore.as_retriever().invoke("hello")
+        elif method == "similarity_search_by_vector":
+            results = adbc_vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3])
+        else:
+            results = getattr(adbc_vectorstore, method)("hello")
+    cursor.execute.assert_called_once()
+    sql = cursor.execute.call_args.args[0]
+    assert 'SELECT "id", "text", "distance", "category", "metadata", ' in sql
+    assert ' AS "_vastdb_distance" FROM "b/s"."t"' in sql
+    assert 'ORDER BY "_vastdb_distance" LIMIT 4' in sql
+    mock_transaction.table_from_metadata.assert_not_called()
+    get_rows.assert_not_called()
+    doc, score = results[0] if method == "similarity_search_with_score" else (results[0], None)
+    assert doc.id == "x" and doc.metadata == {"distance": 7, "category": "news"}
+    if score is not None:
+        assert score == 0.25 and isinstance(score, float)
+
+
 def test_adbc_filter_sql_injection_col_is_quoted(adbc_vectorstore, mock_transaction):
     """P1: double-quotes in column names are escaped (doubled), preventing SQL injection."""
     mock_dbapi = MagicMock()
@@ -1057,64 +1098,37 @@ def test_fallback_warns_on_dimension_mismatch(vectorstore, mock_transaction, cap
     ), caplog.text
 
 
-def test_adbc_step1_warns_on_duplicate_ids(adbc_vectorstore, mock_transaction, caplog):
-    """AC4: ADBC step-1 result with duplicate IDs emits a WARNING."""
+def test_adbc_duplicate_ids_preserve_rows_and_warn(adbc_vectorstore, mock_transaction, caplog):
+    rows = [
+        {"id": "x", "text": "first", "metadata": "{}", "_vastdb_distance": 0.1},
+        {"id": "x", "text": "second", "metadata": "{}", "_vastdb_distance": 0.2},
+    ]
     mock_dbapi = MagicMock()
-    cm = mock_dbapi.connect.return_value.__enter__.return_value
-    mock_cursor = cm.cursor.return_value.__enter__.return_value
-    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
-        "id": ["x", "x", "y"],
-        "distance": [0.1, 0.2, 0.3],
-    }
-    # Step-2 returns matching rows; we only care about the warning here.
-    with patch.object(adbc_vectorstore, "_get_by_ids", return_value=[
-        {"id": "x", "text": "t", "metadata": "{}", "embedding": [0.0, 0.0, 0.0]},
-        {"id": "y", "text": "t", "metadata": "{}", "embedding": [0.0, 0.0, 0.0]},
-    ]), patch(
-        "langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi
-    ), caplog.at_level(logging.WARNING, logger="langchain_vastdb.vectorstores"):
-        adbc_vectorstore._do_vector_search_adbc(
-            mock_transaction, [0.1, 0.2, 0.3], k=3, predicate=None,
-        )
-
-    assert any("duplicate IDs collapsed" in rec.message for rec in caplog.records), caplog.text
-
-
-def test_vector_search_warns_and_falls_back_on_step2_sdk_failure(
-    adbc_vectorstore, mock_transaction, caplog
-):
-    """AC4 / DF-a: a non-ADBC exception from step-2 (`_get_by_ids`) triggers a
-    WARNING and the in-memory fallback path when fallback is allowed."""
-    mock_dbapi = MagicMock()
-    cm = mock_dbapi.connect.return_value.__enter__.return_value
-    mock_cursor = cm.cursor.return_value.__enter__.return_value
-    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
-        "id": ["a"],
-        "distance": [0.1],
-    }
-    fallback_sentinel = [({"id": "fallback", "text": "x", "metadata": "{}"}, 0.0)]
-
-    with patch(
-        "langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi
-    ), patch(
-        "langchain_vastdb.vectorstores._fallback_allowed", return_value=True
-    ), patch.object(
-        adbc_vectorstore, "_get_by_ids", side_effect=RuntimeError("boom")
-    ), patch.object(
-        adbc_vectorstore, "_do_vector_search_fallback", return_value=fallback_sentinel
-    ) as mock_fallback, caplog.at_level(
-        logging.WARNING, logger="langchain_vastdb.vectorstores"
+    conn = mock_dbapi.connect.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value.__enter__.return_value
+    cursor.fetch_arrow_table.return_value.to_pylist.return_value = rows
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi), (
+        caplog.at_level(logging.WARNING, logger="langchain_vastdb.vectorstores")
     ):
-        result = adbc_vectorstore._vector_search(
-            [0.1, 0.2, 0.3], k=4, predicate=None,
+        results = adbc_vectorstore._do_vector_search_adbc(
+            mock_transaction, [0.1, 0.2, 0.3], k=2, predicate=None
         )
+    assert [row["text"] for row, _ in results] == ["first", "second"]
+    assert [score for _, score in results] == [0.1, 0.2]
+    assert all("_vastdb_distance" not in row for row, _ in results)
+    assert "duplicate IDs" in caplog.text
 
-    assert result == fallback_sentinel
-    mock_fallback.assert_called_once()
-    assert any(
-        "step-2 SDK call failed" in rec.message and "RuntimeError" in rec.message
-        for rec in caplog.records
-    ), caplog.text
+
+def test_adbc_error_falls_back_only_when_allowed(adbc_vectorstore, mock_transaction, caplog):
+    fallback_rows = [({"id": "fallback", "text": "x", "metadata": "{}"}, 0.0)]
+    with patch.object(
+        adbc_vectorstore, "_open_adbc_connection", side_effect=OSError("offline")
+    ), patch("langchain_vastdb.vectorstores._fallback_allowed", return_value=True), patch.object(
+        adbc_vectorstore, "_do_vector_search_fallback", return_value=fallback_rows
+    ) as fallback, caplog.at_level(logging.WARNING, logger="langchain_vastdb.vectorstores"):
+        assert adbc_vectorstore._vector_search([0.1, 0.2, 0.3], k=4) == fallback_rows
+    fallback.assert_called_once()
+    assert "ADBC vector search failed" in caplog.text
 
 
 def test_vector_search_does_not_swallow_filter_validation_errors(
@@ -1283,29 +1297,22 @@ def test_vector_search_raises_when_adbc_not_configured_and_fallback_disabled(
             )
 
 
-def test_vector_search_step2_failure_raises_when_fallback_disabled(
-    adbc_vectorstore, mock_transaction
-):
-    """Step-2 SDK failures propagate when VASTDB_ALLOW_FALLBACK is not set."""
-    mock_dbapi = MagicMock()
-    cm = mock_dbapi.connect.return_value.__enter__.return_value
-    mock_cursor = cm.cursor.return_value.__enter__.return_value
-    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
-        "id": ["a"],
-        "distance": [0.1],
-    }
-
-    with patch(
-        "langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi
-    ), patch(
-        "langchain_vastdb.vectorstores._fallback_allowed", return_value=False
-    ), patch.object(
-        adbc_vectorstore, "_get_by_ids", side_effect=RuntimeError("boom")
+def test_adbc_error_raises_when_fallback_disabled(adbc_vectorstore):
+    with patch.object(
+        adbc_vectorstore, "_open_adbc_connection", side_effect=OSError("offline")
+    ), patch("langchain_vastdb.vectorstores._fallback_allowed", return_value=False), pytest.raises(
+        OSError, match="offline"
     ):
-        with pytest.raises(RuntimeError, match="boom"):
-            adbc_vectorstore._vector_search(
-                [0.1, 0.2, 0.3], k=4, predicate=None,
-            )
+        adbc_vectorstore._vector_search([0.1, 0.2, 0.3], k=4)
+
+
+def test_adbc_unexpected_error_propagates_even_with_fallback(adbc_vectorstore):
+    with patch.object(
+        adbc_vectorstore, "_open_adbc_connection", side_effect=RuntimeError("unexpected")
+    ), patch("langchain_vastdb.vectorstores._fallback_allowed", return_value=True), pytest.raises(
+        RuntimeError, match="unexpected"
+    ):
+        adbc_vectorstore._vector_search([0.1, 0.2, 0.3], k=4)
 
 
 def test_fallback_raises_when_table_exceeds_max_rows(
