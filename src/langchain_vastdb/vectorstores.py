@@ -65,6 +65,26 @@ class TypedColumn:
 _adbc_dbapi: types.ModuleType | None = None
 
 _FALLBACK_MAX_ROWS = 1000
+_ADBC_ID_BATCH = 1000
+_ADBC_TXID_PROPERTY = "vast.db.external_txid"
+_ADBC_DISTANCE_ALIAS = "_vastdb_distance"
+
+
+def _quote_ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _adbc_error_types() -> tuple[type[BaseException], ...]:
+    from vastdb.transaction import NoAdbcConnectionError
+
+    errors: tuple[type[BaseException], ...] = (NoAdbcConnectionError, ImportError, OSError)
+    try:
+        from adbc_driver_manager import Error as AdbcError
+
+        errors += (AdbcError,)
+    except ImportError:
+        pass
+    return errors
 
 
 def _get_adbc_dbapi() -> types.ModuleType:
@@ -1168,6 +1188,12 @@ class VastDBVectorStore(VectorStore):
             reader = table.select(columns=[self._id_column], predicate=predicate)
             return reader.read_all().num_rows
 
+    def _adbc_table_path(self) -> str:
+        return (
+            f'{_quote_ident(self._table_ref.bucket + "/" + self._table_ref.schema)}'
+            f'.{_quote_ident(self._table_ref.table)}'
+        )
+
     def _adbc_available(self) -> bool:
         """Return True when all four ADBC parameters are configured and non-blank."""
         def _nonblank(val: object) -> bool:
@@ -1251,25 +1277,11 @@ class VastDBVectorStore(VectorStore):
             RuntimeError: If ADBC is not configured and fallback is not allowed.
         """
         if self._adbc_available():
-            from vastdb.transaction import NoAdbcConnectionError
-
-            adbc_exc_types: tuple[type[BaseException], ...] = (
-                NoAdbcConnectionError,
-                ImportError,
-                OSError,
-            )
-            try:
-                from adbc_driver_manager import Error as _AdbcError
-
-                adbc_exc_types = adbc_exc_types + (_AdbcError,)
-            except ImportError:
-                pass
-
             try:
                 return self._do_vector_search_adbc(tx, query_vector, k, predicate, **kwargs)
             except (TypeError, ValueError):
                 raise
-            except adbc_exc_types as exc:
+            except _adbc_error_types() as exc:
                 if not _fallback_allowed():
                     raise
                 _logger.warning(
@@ -1445,11 +1457,7 @@ class VastDBVectorStore(VectorStore):
             List of (row_dict, distance_score) tuples ordered by distance.
         """
         dim = len(query_vector)
-        # Escape any embedded double-quotes in identifier components (P2).
-        bucket_esc = self._table_ref.bucket.replace('"', '""')
-        schema_esc = self._table_ref.schema.replace('"', '""')
-        table_esc = self._table_ref.table.replace('"', '""')
-        table_path = f'"{bucket_esc}/{schema_esc}"."{table_esc}"'
+        table_path = self._adbc_table_path()
 
         # Build WHERE clause via the protected hook (overridable by subclasses).
         where_body = self._build_adbc_where_clause(predicate, **kwargs)
@@ -1459,10 +1467,8 @@ class VastDBVectorStore(VectorStore):
         # Cast to plain float to avoid np.float64(...) in the SQL literal.
         float_vec = [float(x) for x in query_vector]
         # Quote all column identifiers to avoid SQL keyword conflicts.
-        id_col_esc = self._id_column.replace('"', '""')
-        quoted_id_col = f'"{id_col_esc}"'
-        vec_col_esc = self._vector_column.replace('"', '""')
-        quoted_vec_col = f'"{vec_col_esc}"'
+        quoted_id_col = _quote_ident(self._id_column)
+        quoted_vec_col = _quote_ident(self._vector_column)
         distance_expr = self._adbc_distance_expr(quoted_vec_col, float_vec, dim)
         query = (
             f"SELECT {quoted_id_col}, "
