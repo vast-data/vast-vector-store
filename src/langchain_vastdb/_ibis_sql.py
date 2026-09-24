@@ -82,9 +82,15 @@ def _ibis_resolver_to_sql(node: object) -> str:
         seq = node.args[0]  # type: ignore[attr-defined]  # Sequence node
         sql_vals = [_ibis_literal_to_sql(v.value) for v in seq.values]
         if method == "isin":
-            return "1=0" if not sql_vals else "(" + " OR ".join(f"{col_sql} = {v}" for v in sql_vals) + ")"
+            return (
+                "1=0" if not sql_vals
+                else "(" + " OR ".join(f"{col_sql} = {v}" for v in sql_vals) + ")"
+            )
         if method == "notin":
-            return "1=1" if not sql_vals else "(" + " AND ".join(f"{col_sql} != {v}" for v in sql_vals) + ")"
+            return (
+                "1=1" if not sql_vals
+                else "(" + " AND ".join(f"{col_sql} != {v}" for v in sql_vals) + ")"
+            )
         raise TypeError(f"Unsupported ibis method call: {method!r}")
     if t == "Item":
         return _ibis_col_sql(node)
