@@ -780,15 +780,26 @@ def test_adbc_search_projects_document_in_one_query(adbc_vectorstore, mock_trans
         assert score == 0.25 and isinstance(score, float)
 
 
+def test_adbc_search_isin_filter_uses_or_chain(adbc_vectorstore):
+    dbapi = MagicMock()
+    conn = dbapi.connect.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value.__enter__.return_value
+    cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi):
+        assert adbc_vectorstore.similarity_search_by_vector(
+            [0.1, 0.2, 0.3], predicate=_["category"].isin(["news", "it's"])
+        ) == []
+    sql = cursor.execute.call_args.args[0]
+    assert 'WHERE ("category" = \'news\' OR "category" = \'it\'\'s\')' in sql
+    assert " IN (" not in sql
+
+
 def test_adbc_filter_sql_injection_col_is_quoted(adbc_vectorstore, mock_transaction):
     """P1: double-quotes in column names are escaped (doubled), preventing SQL injection."""
     mock_dbapi = MagicMock()
     _cm = mock_dbapi.connect.return_value.__enter__.return_value
     mock_cursor = _cm.cursor.return_value.__enter__.return_value
-    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
-        "id": [],
-        "distance": [],
-    }
+    mock_cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
     predicate = _['"evil"'] == "val"
     with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
         adbc_vectorstore._do_vector_search_adbc(
@@ -806,10 +817,7 @@ def test_adbc_filter_string_value_with_single_quote_is_escaped(
     mock_dbapi = MagicMock()
     _cm = mock_dbapi.connect.return_value.__enter__.return_value
     mock_cursor = _cm.cursor.return_value.__enter__.return_value
-    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
-        "id": [],
-        "distance": [],
-    }
+    mock_cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
 
     with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
         adbc_vectorstore._do_vector_search_adbc(
@@ -849,10 +857,7 @@ def test_adbc_table_path_double_quotes_in_bucket_are_escaped(
     mock_dbapi = MagicMock()
     _cm2 = mock_dbapi.connect.return_value.__enter__.return_value
     mock_cursor = _cm2.cursor.return_value.__enter__.return_value
-    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
-        "id": [],
-        "distance": [],
-    }
+    mock_cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
 
     with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
         store._do_vector_search_adbc(mock_transaction, [0.1, 0.2, 0.3], k=4, predicate=None)
@@ -1178,10 +1183,7 @@ def test_adbc_column_identifiers_are_quoted_in_sql(
     mock_dbapi = MagicMock()
     cm = mock_dbapi.connect.return_value.__enter__.return_value
     mock_cursor = cm.cursor.return_value.__enter__.return_value
-    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
-        "select": [],
-        "distance": [],
-    }
+    mock_cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
 
     with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
         store._do_vector_search_adbc(
@@ -1886,10 +1888,7 @@ def test_build_adbc_where_clause_override(
     mock_dbapi = MagicMock()
     cm = mock_dbapi.connect.return_value.__enter__.return_value
     mock_cursor = cm.cursor.return_value.__enter__.return_value
-    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
-        "id": [],
-        "distance": [],
-    }
+    mock_cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
 
     with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
         store._do_vector_search_adbc(
@@ -1911,10 +1910,9 @@ def test_open_adbc_connection_override(
     """Subclass can override _open_adbc_connection to return custom conn."""
     mock_conn = MagicMock()
     mock_cursor = mock_conn.cursor.return_value.__enter__.return_value
-    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
-        "id": ["doc1"],
-        "distance": [0.5],
-    }
+    mock_cursor.fetch_arrow_table.return_value.to_pylist.return_value = [
+        {"id": "doc1", "text": "hello", "metadata": "{}", "_vastdb_distance": 0.5}
+    ]
 
     class CustomConnStore(VastDBVectorStore):
         @__import__("contextlib").contextmanager
@@ -1968,10 +1966,7 @@ def test_adbc_conn_kwargs_passed_to_connect(
     mock_dbapi = MagicMock()
     cm = mock_dbapi.connect.return_value.__enter__.return_value
     mock_cursor = cm.cursor.return_value.__enter__.return_value
-    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
-        "id": [],
-        "distance": [],
-    }
+    mock_cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
 
     with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
         store._do_vector_search_adbc(
@@ -2009,10 +2004,7 @@ def test_adbc_cosine_metric_uses_cosine_distance_sql(
     mock_dbapi = MagicMock()
     cm = mock_dbapi.connect.return_value.__enter__.return_value
     mock_cursor = cm.cursor.return_value.__enter__.return_value
-    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
-        "id": [],
-        "distance": [],
-    }
+    mock_cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
 
     with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
         store._do_vector_search_adbc(
@@ -2047,10 +2039,7 @@ def test_adbc_ip_metric_uses_inner_product_sql(
     mock_dbapi = MagicMock()
     cm = mock_dbapi.connect.return_value.__enter__.return_value
     mock_cursor = cm.cursor.return_value.__enter__.return_value
-    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
-        "id": [],
-        "distance": [],
-    }
+    mock_cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
 
     with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
         store._do_vector_search_adbc(
@@ -2085,10 +2074,7 @@ def test_adbc_l2sq_metric_uses_array_distance_sql(
     mock_dbapi = MagicMock()
     cm = mock_dbapi.connect.return_value.__enter__.return_value
     mock_cursor = cm.cursor.return_value.__enter__.return_value
-    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
-        "id": [],
-        "distance": [],
-    }
+    mock_cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
 
     with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
         store._do_vector_search_adbc(
@@ -2370,9 +2356,7 @@ def test_adbc_db_kwargs_overrides_merged_per_call(
     mock_dbapi = MagicMock()
     cm_conn = mock_dbapi.connect.return_value.__enter__.return_value
     mock_cursor = cm_conn.cursor.return_value.__enter__.return_value
-    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
-        "id": [], "distance": [],
-    }
+    mock_cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
 
     with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
         store.similarity_search_by_vector(
@@ -2410,9 +2394,7 @@ def test_adbc_conn_kwargs_overrides_merged_per_call(
     mock_dbapi = MagicMock()
     cm_conn = mock_dbapi.connect.return_value.__enter__.return_value
     mock_cursor = cm_conn.cursor.return_value.__enter__.return_value
-    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
-        "id": [], "distance": [],
-    }
+    mock_cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
 
     with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
         store.similarity_search_by_vector(
@@ -2446,9 +2428,7 @@ def test_unknown_search_kwargs_are_tolerated(
     mock_dbapi = MagicMock()
     cm_conn = mock_dbapi.connect.return_value.__enter__.return_value
     mock_cursor = cm_conn.cursor.return_value.__enter__.return_value
-    mock_cursor.fetch_arrow_table.return_value.to_pydict.return_value = {
-        "id": [], "distance": [],
-    }
+    mock_cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
 
     with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=mock_dbapi):
         store.similarity_search_by_vector(
