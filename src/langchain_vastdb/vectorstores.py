@@ -1126,10 +1126,9 @@ class VastDBVectorStore(VectorStore):
     ) -> list[dict]:
         """Retrieve raw row dicts for the given document IDs from VastDB.
 
-        Default hook implementation. Opens a transaction if one is not
-        provided, selects only the id, text, and metadata columns (omitting
-        the large vector column), and returns the results as plain Python
-        dicts via ``read_all().to_pylist()``.
+        Uses batched Query Engine SELECTs when ADBC is configured; otherwise
+        uses the SDK. Both paths omit the large vector column and return row
+        dicts for the selected document columns.
 
         Subclasses may override this to return additional columns or apply
         custom post-processing.
@@ -1143,8 +1142,38 @@ class VastDBVectorStore(VectorStore):
             List of row dicts. Each dict contains the id, text, and metadata
             columns for a matched document.
         """
-        predicate = ibis._[self._id_column].isin(ids)
+        if not ids:
+            return []
         columns = self._select_columns()
+        if self._adbc_available():
+            unique_ids = list(dict.fromkeys(ids))
+            conn_kwargs = (
+                {"adbc_conn_kwargs_overrides": {_ADBC_TXID_PROPERTY: str(tx.txid)}}
+                if tx is not None else {}
+            )
+            try:
+                rows: list[dict] = []
+                with self._open_adbc_connection(**conn_kwargs) as conn:
+                    with conn.cursor() as cursor:
+                        for start in range(0, len(unique_ids), _ADBC_ID_BATCH):
+                            predicate = ibis._[self._id_column].isin(
+                                unique_ids[start:start + _ADBC_ID_BATCH]
+                            )
+                            cursor.execute(
+                                f"SELECT {', '.join(map(_quote_ident, columns))} "
+                                f"FROM {self._adbc_table_path()} "
+                                f"WHERE {predicate_to_sql_where(predicate)}"
+                            )
+                            rows.extend(cursor.fetch_arrow_table().to_pylist())
+                return rows
+            except _adbc_error_types() as exc:
+                if not _fallback_allowed():
+                    raise
+                _logger.warning(
+                    "ADBC get_by_ids failed (%s: %s); falling back to SDK select.",
+                    type(exc).__name__, exc,
+                )
+        predicate = ibis._[self._id_column].isin(ids)
         with self._ensure_tx(tx) as active_tx:
             table = self._get_table(active_tx)
             reader = table.select(columns=columns, predicate=predicate)

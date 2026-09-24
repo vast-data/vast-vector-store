@@ -611,6 +611,63 @@ def adbc_vectorstore(mock_session, fake_embedding, mock_transaction):
     return store
 
 
+def test_adbc_get_by_ids_batches_dedupes_and_uses_one_connection(adbc_vectorstore):
+    dbapi = MagicMock()
+    conn = dbapi.connect.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value.__enter__.return_value
+    cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
+    ids = [f"id-{i}" for i in range(2500)] + ["id-0"]
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi):
+        assert adbc_vectorstore._get_by_ids(ids) == []
+    dbapi.connect.assert_called_once()
+    assert "conn_kwargs" not in dbapi.connect.call_args.kwargs
+    assert cursor.execute.call_count == 3
+    queries = [call.args[0] for call in cursor.execute.call_args_list]
+    assert all(query.startswith('SELECT "id", "text", "metadata" FROM "b/s"."t" WHERE (')
+               for query in queries)
+    assert all(" IN (" not in query for query in queries)
+    assert queries[0].count("\"id\" = 'id-0'") == 1
+    assert "id-999" in queries[0] and "id-1000" in queries[1]
+    assert "id-1999" in queries[1] and "id-2000" in queries[2]
+
+
+def test_adbc_get_by_ids_empty_and_tx_join(adbc_vectorstore, mock_transaction):
+    mock_transaction.txid = 123
+    dbapi = MagicMock()
+    conn = dbapi.connect.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value.__enter__.return_value
+    cursor.fetch_arrow_table.return_value.to_pylist.return_value = [
+        {"id": "it's", "text": "yes", "metadata": "{}"}
+    ]
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi):
+        assert adbc_vectorstore._get_by_ids([]) == []
+        dbapi.connect.assert_not_called()
+        rows = adbc_vectorstore._get_by_ids(["it's"], tx=mock_transaction)
+    assert rows == [{"id": "it's", "text": "yes", "metadata": "{}"}]
+    assert "'it''s'" in cursor.execute.call_args.args[0]
+    assert dbapi.connect.call_args.kwargs["conn_kwargs"] == {"vast.db.external_txid": "123"}
+
+
+@pytest.mark.parametrize("allow_fallback", [False, True])
+def test_adbc_get_by_ids_error_fallback(adbc_vectorstore, mock_transaction, allow_fallback):
+    dbapi = MagicMock()
+    dbapi.connect.side_effect = OSError("offline")
+    sdk_table = mock_transaction.table_from_metadata.return_value
+    sdk_table.select.return_value.read_all.return_value.to_pylist.return_value = [
+        {"id": "a", "text": "sdk", "metadata": "{}"}
+    ]
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi), patch(
+        "langchain_vastdb.vectorstores._fallback_allowed", return_value=allow_fallback
+    ):
+        if allow_fallback:
+            assert adbc_vectorstore._get_by_ids(["a"])[0]["text"] == "sdk"
+            sdk_table.select.assert_called_once()
+        else:
+            with pytest.raises(OSError, match="offline"):
+                adbc_vectorstore._get_by_ids(["a"])
+            sdk_table.select.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "method",
     [
