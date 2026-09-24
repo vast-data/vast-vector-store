@@ -1159,10 +1159,10 @@ class VastDBVectorStore(VectorStore):
             List of row dicts. Each dict contains the id, text, and metadata
             columns for a matched document.
         """
-        if not ids:
-            return []
         columns = self._select_columns()
         if self._adbc_available():
+            if not ids:
+                return []
             unique_ids = list(dict.fromkeys(ids))
             conn_kwargs = (
                 {"adbc_conn_kwargs_overrides": {_ADBC_TXID_PROPERTY: str(tx.txid)}}

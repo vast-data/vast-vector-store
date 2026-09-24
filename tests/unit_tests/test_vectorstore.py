@@ -306,6 +306,13 @@ def test_delete_with_empty_ids_returns_none(vectorstore):
     assert result is None
 
 
+def test_sdk_get_by_ids_empty_preserves_select_path(vectorstore, mock_transaction):
+    table = mock_transaction.table_from_metadata.return_value
+    table.select.return_value.read_all.return_value.to_pylist.return_value = []
+    assert vectorstore._get_by_ids([]) == []
+    table.select.assert_called_once()
+
+
 def test_get_by_ids_returns_correct_documents(vectorstore, mock_transaction, sample_rows):
     mock_table = mock_transaction.table_from_metadata.return_value
     mock_reader = MagicMock()
