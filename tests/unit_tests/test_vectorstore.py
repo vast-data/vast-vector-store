@@ -611,6 +611,77 @@ def adbc_vectorstore(mock_session, fake_embedding, mock_transaction):
     return store
 
 
+def test_adbc_delete_joins_tx_and_closes_before_commit(
+    adbc_vectorstore, mock_transaction, mock_session
+):
+    mock_transaction.txid = 123
+    events = []
+    dbapi = MagicMock()
+    conn_cm = dbapi.connect.return_value
+    conn_cm.__exit__.side_effect = lambda *args: events.append("connection closed")
+    mock_session.transaction.return_value.__exit__.side_effect = (
+        lambda *args: events.append("transaction closed")
+    )
+    cursor = conn_cm.__enter__.return_value.cursor.return_value.__enter__.return_value
+    sdk_table = mock_transaction.table_from_metadata.return_value
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi):
+        assert adbc_vectorstore._delete_by_ids(["a", "it's"]) is True
+    assert cursor.execute.call_args.args[0] == (
+        'DELETE FROM "b/s"."t" WHERE ("id" = \'a\' OR "id" = \'it\'\'s\')'
+    )
+    assert dbapi.connect.call_args.kwargs["conn_kwargs"] == {"vast.db.external_txid": "123"}
+    assert events == ["connection closed", "transaction closed"]
+    mock_transaction.table_from_metadata.assert_not_called()
+    sdk_table.select.assert_not_called()
+    sdk_table.delete.assert_not_called()
+
+
+def test_adbc_delete_batches_and_empty_skips_connection(adbc_vectorstore, mock_transaction):
+    mock_transaction.txid = 123
+    dbapi = MagicMock()
+    conn = dbapi.connect.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value.__enter__.return_value
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi):
+        assert adbc_vectorstore._delete_by_ids([]) is True
+        dbapi.connect.assert_not_called()
+        assert adbc_vectorstore._delete_by_ids([str(i) for i in range(2500)]) is True
+    assert dbapi.connect.call_count == 1
+    assert cursor.execute.call_count == 3
+    assert all(" IN (" not in call.args[0] for call in cursor.execute.call_args_list)
+
+
+def test_adbc_delete_error_propagates(adbc_vectorstore, mock_transaction):
+    mock_transaction.txid = 123
+    dbapi = MagicMock()
+    dbapi.connect.side_effect = OSError("offline")
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi), patch(
+        "langchain_vastdb.vectorstores._fallback_allowed", return_value=True
+    ), pytest.raises(OSError, match="offline"):
+        adbc_vectorstore._delete_by_ids(["a"])
+    mock_transaction.table_from_metadata.assert_not_called()
+
+
+def test_adbc_upsert_delete_and_sdk_insert_share_transaction(
+    adbc_vectorstore, mock_transaction, mock_session
+):
+    mock_transaction.txid = 123
+    dbapi = MagicMock()
+    conn = dbapi.connect.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value.__enter__.return_value
+    sdk_table = mock_transaction.table_from_metadata.return_value
+    calls = MagicMock()
+    calls.attach_mock(cursor.execute, "delete_sql")
+    calls.attach_mock(sdk_table.insert, "insert_arrow")
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi):
+        assert adbc_vectorstore.add_texts(["hello"], ids=["a"]) == ["a"]
+    assert [call[0] for call in calls.mock_calls] == ["delete_sql", "insert_arrow"]
+    mock_session.transaction.assert_called_once()
+    assert 'DELETE FROM "b/s"."t" WHERE ("id" = \'a\')' == cursor.execute.call_args.args[0]
+    assert dbapi.connect.call_args.kwargs["conn_kwargs"]["vast.db.external_txid"] == "123"
+    sdk_table.insert.assert_called_once()
+    mock_transaction.table_from_metadata.assert_called_once()
+
+
 def test_adbc_get_by_ids_batches_dedupes_and_uses_one_connection(adbc_vectorstore):
     dbapi = MagicMock()
     conn = dbapi.connect.return_value.__enter__.return_value

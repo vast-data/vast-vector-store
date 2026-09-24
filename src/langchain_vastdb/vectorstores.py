@@ -1072,12 +1072,9 @@ class VastDBVectorStore(VectorStore):
     ) -> bool:
         """Delete documents matching the given IDs from VastDB.
 
-        Default hook implementation. Opens a transaction if one is not
-        provided, selects matching rows with their internal ``$row_id``
-        column, then passes that RecordBatch to ``table.delete()``.
-
-        ``table.delete()`` requires a RecordBatch containing the internal
-        ``$row_id`` field — it does not accept ibis predicates directly.
+        When ADBC is configured, executes batched Query Engine DELETEs joined
+        to the SDK transaction. Otherwise selects internal ``$row_id`` rows
+        and passes them to the SDK ``table.delete()``.
 
         Subclasses may override this method to customise deletion behaviour
         while keeping the ``delete`` template method intact.
@@ -1092,13 +1089,27 @@ class VastDBVectorStore(VectorStore):
         """
         if not ids:
             return True
-        predicate = ibis._[self._id_column].isin(ids)
         with self._ensure_tx(tx) as active_tx:
-            table = self._get_table(active_tx)
-            rows = table.select(
-                columns=[self._id_column], predicate=predicate, internal_row_id=True
-            ).read_all()
-            table.delete(rows)
+            if self._adbc_available():
+                with self._open_adbc_connection(
+                    adbc_conn_kwargs_overrides={_ADBC_TXID_PROPERTY: str(active_tx.txid)}
+                ) as conn:
+                    with conn.cursor() as cursor:
+                        for start in range(0, len(ids), _ADBC_ID_BATCH):
+                            predicate = ibis._[self._id_column].isin(
+                                ids[start:start + _ADBC_ID_BATCH]
+                            )
+                            cursor.execute(
+                                f"DELETE FROM {self._adbc_table_path()} "
+                                f"WHERE {predicate_to_sql_where(predicate)}"
+                            )
+            else:
+                predicate = ibis._[self._id_column].isin(ids)
+                table = self._get_table(active_tx)
+                rows = table.select(
+                    columns=[self._id_column], predicate=predicate, internal_row_id=True
+                ).read_all()
+                table.delete(rows)
             return True
 
     def get_by_ids(self, ids: list[str], /) -> list[Document]:
