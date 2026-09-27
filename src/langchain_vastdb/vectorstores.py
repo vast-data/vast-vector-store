@@ -13,6 +13,7 @@ from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 import ibis
 import pyarrow as pa
@@ -33,6 +34,27 @@ if TYPE_CHECKING:
 
 
 _logger = logging.getLogger(__name__)
+
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _connect(**kwargs: Any) -> Any:
+    """``vastdb.connect``, pinning data_endpoints on loopback so 2.1 skips VIP discovery.
+
+    vastdb 2.1 probes cluster-private VIPs; behind an SSH tunnel those time out.
+    Direct cluster URLs still discover. # ponytail: loopback-only pin, pass SessionConfig
+    """
+    endpoint = kwargs.get("endpoint") or os.environ.get("AWS_S3_ENDPOINT_URL")
+    if endpoint and "config" not in kwargs:
+        host = urlparse(endpoint).hostname
+        if host in _LOOPBACK_HOSTS:
+            try:
+                from vastdb.config import SessionConfig
+
+                kwargs = {**kwargs, "config": SessionConfig(data_endpoints=[endpoint])}
+            except (ImportError, TypeError):
+                pass
+    return vastdb.connect(**kwargs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -360,7 +382,7 @@ class VastDBVectorStore(VectorStore):
             A configured ``VastDBVectorStore`` instance.
         """
         if session is None:
-            session = vastdb.connect(
+            session = _connect(
                 endpoint=endpoint,
                 access=access_key,
                 secret=secret_key,
@@ -594,7 +616,7 @@ class VastDBVectorStore(VectorStore):
         table_name = table_name or f"vs_{uuid.uuid4().hex[:12]}"
 
         if session is None:
-            session = vastdb.connect(
+            session = _connect(
                 endpoint=endpoint,
                 access=access_key,
                 secret=secret_key,

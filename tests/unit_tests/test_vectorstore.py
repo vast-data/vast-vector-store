@@ -102,6 +102,24 @@ def test_from_connection_params_patches_vastdb_connect(mock_session, fake_embedd
     assert store._session is mock_session
 
 
+def test_connect_pins_data_endpoints_on_loopback():
+    """vastdb 2.1 VIP discovery is skipped when the endpoint is loopback."""
+    from vastdb.config import SessionConfig
+
+    from langchain_vastdb.vectorstores import _connect
+
+    with patch("langchain_vastdb.vectorstores.vastdb.connect") as mock_connect:
+        _connect(endpoint="https://localhost:18151", access="ak", secret="sk")
+        kwargs = mock_connect.call_args.kwargs
+        assert kwargs["config"] == SessionConfig(
+            data_endpoints=["https://localhost:18151"]
+        )
+
+    with patch("langchain_vastdb.vectorstores.vastdb.connect") as mock_connect:
+        _connect(endpoint="http://vast:8080", access="ak", secret="sk")
+        assert "config" not in mock_connect.call_args.kwargs
+
+
 def test_custom_column_name_configuration(mock_session, fake_embedding):
     store = VastDBVectorStore(
         embedding=fake_embedding,

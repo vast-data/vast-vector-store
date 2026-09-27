@@ -8,7 +8,6 @@ from typing import Any
 
 import pyarrow as pa
 import pytest
-import vastdb
 from ibis import _
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
@@ -21,6 +20,7 @@ from langchain_tests.integration_tests.vectorstores import EMBEDDING_SIZE
 from vastdb.config import BackoffConfig
 
 from langchain_vastdb import VastDBVectorStore
+from langchain_vastdb.vectorstores import _connect
 
 # ---------------------------------------------------------------------------
 # Environment variable handling
@@ -64,7 +64,7 @@ def _vastdb_session():
     # Note: adbc_driver is NOT passed to vastdb.connect() — the SDK would route
     # it through the HTTPS endpoint (TLS issues). VastDBVectorStore opens its own
     # ADBC connection directly to adbc_endpoint (the QueryEngine IP).
-    session = vastdb.connect(
+    session = _connect(
         endpoint=os.environ["AWS_S3_ENDPOINT_URL"],
         access=os.environ["AWS_ACCESS_KEY_ID"],
         secret=os.environ["AWS_SECRET_ACCESS_KEY"],
