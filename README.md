@@ -16,9 +16,16 @@ native vector indexing.
 ## Requirements
 
 - Python 3.10+
-- A running VAST Database cluster; Query Engine operations require VAST 5.4+.
-  VAST 5.4 uses brute-force search (not live-tested here; delete is unverified);
-  VAST 5.5 uses a vector index when present. VAST 5.3 has no Query Engine.
+- A running VAST Database cluster. The store reads the cluster version from
+  the SDK session and picks paths per operation:
+
+  | VAST | search | `get_by_ids` | delete | notes |
+  |---|---|---|---|---|
+  | 5.3 | SDK in-memory scan (`VASTDB_ALLOW_FALLBACK=1` required) | SDK | SDK | no Query Engine |
+  | 5.4 | Query Engine, brute force | Query Engine | SDK | not live-tested; Query Engine DML unverified |
+  | 5.5 | Query Engine, vector index when built | Query Engine | Query Engine | verified on 5.5.1 |
+
+  Configuring ADBC on a 5.3 cluster is harmless: lookup and delete stay on the SDK.
 - `vastdb` SDK >= 2.0.3
 - `langchain-core` >= 1.0, < 2
 - An `Embeddings` model (e.g., OpenAI, HuggingFace, or any LangChain-compatible embeddings)
@@ -236,10 +243,14 @@ connection parameters.
 With the ADBC driver, endpoint and credentials configured, vector search fetches
 ranked documents in one Query Engine SQL query. `get_by_ids` and delete also
 use the Query Engine; upsert joins the SQL delete and SDK Arrow insert in one
-transaction. Insertion remains SDK Arrow. A vector index is optional (VAST 5.4
-uses brute-force search; 5.5 uses the index when present). Without ADBC,
-lookup and delete retain their SDK paths. Search falls back to an in-memory
-scan only when `VASTDB_ALLOW_FALLBACK=1` is set, including on ADBC errors.
+transaction. Insertion remains SDK Arrow. A vector index is optional: without
+one (or on VAST 5.4) the Query Engine brute-forces the distance; with one, the
+distance function comes from the index metadata (`array_distance` for l2sq,
+`array_inner_product` for ip). A freshly created indexed table may brute-force
+until the index is built. See the version table under Requirements for which
+operations use the Query Engine on 5.3, 5.4 and 5.5. Without ADBC, lookup and
+delete retain their SDK paths. With `VASTDB_ALLOW_FALLBACK=1`, search, lookup
+and delete all fall back to the SDK on ADBC errors; otherwise errors propagate.
 
 Unfiltered `count()` uses cached table stats, which may lag recent writes or
 over-count while a table settles. Use `count(predicate)` for an exact count;
