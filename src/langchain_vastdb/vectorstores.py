@@ -1302,6 +1302,7 @@ class VastDBVectorStore(VectorStore):
         """
         columns = self._select_columns()
         with self._ensure_tx(tx) as active_tx:
+            self._get_table(active_tx)  # loads vector index metadata once
             return self._do_vector_search(
                 active_tx, query_vector, k, columns, predicate,
                 **kwargs,
@@ -1472,20 +1473,24 @@ class VastDBVectorStore(VectorStore):
         """
         if not all(math.isfinite(x) for x in query_vec):
             raise ValueError("query vector contains non-finite values")
-        metric = self._resolve_distance_metric()
         vec_literal = f"ARRAY{query_vec}::FLOAT[{dim}]"
         col_cast = f"{vec_col_sql}::FLOAT[{dim}]"
-
-        if metric == "l2sq":
-            return f"array_distance({col_cast}, {vec_literal})"
-        if metric == "cosine":
-            return f"cosine_distance({col_cast}, {vec_literal})"
-        if metric == "ip":
-            return f"inner_product({col_cast}, {vec_literal})"
-        raise ValueError(
-            f"Unknown distance metric {metric!r}; supported: 'l2sq', 'cosine', 'ip'. "
-            f"Override _adbc_distance_expr() for custom metrics."
-        )
+        vi = self._table_metadata._vector_index
+        if vi is not None:
+            metric, fn = vi.distance_metric, vi.sql_distance_function
+        else:
+            metric = self._resolve_distance_metric()
+            fn = {"l2sq": "array_distance", "cosine": "cosine_distance",
+                  "ip": "array_inner_product"}.get(metric)
+            if fn is None:
+                raise ValueError(
+                    f"Unknown distance metric {metric!r}; supported: 'l2sq', 'cosine', 'ip'. "
+                    f"Override _adbc_distance_expr() for custom metrics."
+                )
+        expr = f"{fn}({col_cast}, {vec_literal})"
+        # array_inner_product is a similarity (higher = closer); negate so ASC ordering
+        # and the returned score mean "lower = more similar" like the other metrics.
+        return f"-{expr}" if metric == "ip" else expr
 
     def _do_vector_search_adbc(
         self,

@@ -764,6 +764,19 @@ def test_adbc_get_by_ids_error_fallback(adbc_vectorstore, mock_transaction, allo
             sdk_table.select.assert_not_called()
 
 
+def test_adbc_search_uses_index_sql_distance_function(adbc_vectorstore):
+    adbc_vectorstore._table_metadata._vector_index = MagicMock(
+        distance_metric="ip", sql_distance_function="array_inner_product"
+    )
+    dbapi = MagicMock()
+    conn = dbapi.connect.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value.__enter__.return_value
+    cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi):
+        adbc_vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3])
+    assert '-array_inner_product("embedding"::FLOAT[3], ' in cursor.execute.call_args.args[0]
+
+
 @pytest.mark.parametrize(
     "method",
     [
@@ -797,7 +810,7 @@ def test_adbc_search_projects_document_in_one_query(adbc_vectorstore, mock_trans
     assert 'SELECT "id", "text", "distance", "category", "metadata", ' in sql
     assert ' AS "_vastdb_distance" FROM "b/s"."t"' in sql
     assert 'ORDER BY "_vastdb_distance" LIMIT 4' in sql
-    mock_transaction.table_from_metadata.assert_not_called()
+    mock_transaction.table_from_metadata.return_value.select.assert_not_called()
     get_rows.assert_not_called()
     doc, score = results[0] if method == "similarity_search_with_score" else (results[0], None)
     assert doc.id == "x" and doc.metadata == {"distance": 7, "category": "news"}
