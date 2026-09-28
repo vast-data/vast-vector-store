@@ -332,6 +332,29 @@ class VastDBVectorStore(VectorStore):
             raise ValueError(
                 f"Typed column names conflict with core columns: {sorted(conflicts)}"
             )
+        if id_column not in self._select_columns():
+            raise ValueError(
+                f"_select_columns() must include the id column {id_column!r}; "
+                f"got {self._select_columns()!r}. Search and lookup map rows back to "
+                f"Document.id by this column, so a subclass override cannot drop it."
+            )
+
+    def _vast_version(self) -> tuple[int, ...]:
+        """Cluster version from the SDK session, e.g. ``(5, 5, 1)``.
+
+        Unknown (mocked or pre-populated sessions) is treated as newest so the
+        ADBC gates below don't silently disable configured Query Engine paths.
+        """
+        v = getattr(getattr(self._session, "features", None), "vast_version", None)
+        return v if isinstance(v, tuple) else (99,)
+
+    def _qe_reads(self) -> bool:
+        """Query Engine SELECT (search, lookup): ADBC configured and VAST 5.4+."""
+        return self._adbc_available() and self._vast_version() >= (5, 4)
+
+    def _qe_writes(self) -> bool:
+        """Query Engine DELETE: ADBC configured and VAST 5.5+ (DML verified on 5.5.1 only)."""
+        return self._adbc_available() and self._vast_version() >= (5, 5)
 
     @classmethod
     def from_connection_params(
@@ -1118,27 +1141,39 @@ class VastDBVectorStore(VectorStore):
         if not ids:
             return True
         with self._ensure_tx(tx) as active_tx:
-            if self._adbc_available():
-                with self._open_adbc_connection(
-                    adbc_conn_kwargs_overrides={_ADBC_TXID_PROPERTY: str(active_tx.txid)}
-                ) as conn:
-                    with conn.cursor() as cursor:
-                        for start in range(0, len(ids), _ADBC_ID_BATCH):
-                            predicate = ibis._[self._id_column].isin(
-                                ids[start:start + _ADBC_ID_BATCH]
-                            )
-                            cursor.execute(
-                                f"DELETE FROM {self._adbc_table_path()} "
-                                f"WHERE {predicate_to_sql_where(predicate)}"
-                            )
-            else:
-                predicate = ibis._[self._id_column].isin(ids)
-                table = self._get_table(active_tx)
-                rows = table.select(
-                    columns=[self._id_column], predicate=predicate, internal_row_id=True
-                ).read_all()
-                table.delete(rows)
+            if self._qe_writes():
+                try:
+                    self._delete_by_ids_adbc(ids, active_tx)
+                    return True
+                except _adbc_error_types() as exc:
+                    if not _fallback_allowed():
+                        raise
+                    _logger.warning(
+                        "ADBC delete failed (%s: %s); falling back to SDK delete.",
+                        type(exc).__name__, exc,
+                    )
+            predicate = ibis._[self._id_column].isin(ids)
+            table = self._get_table(active_tx)
+            rows = table.select(
+                columns=[self._id_column], predicate=predicate, internal_row_id=True
+            ).read_all()
+            table.delete(rows)
             return True
+
+    def _delete_by_ids_adbc(self, ids: list[str], tx: Transaction) -> None:
+        """Batched Query Engine DELETEs joined to *tx* via ``vast.db.external_txid``."""
+        with self._open_adbc_connection(
+            adbc_conn_kwargs_overrides={_ADBC_TXID_PROPERTY: str(tx.txid)}
+        ) as conn:
+            with conn.cursor() as cursor:
+                for start in range(0, len(ids), _ADBC_ID_BATCH):
+                    predicate = ibis._[self._id_column].isin(
+                        ids[start:start + _ADBC_ID_BATCH]
+                    )
+                    cursor.execute(
+                        f"DELETE FROM {self._adbc_table_path()} "
+                        f"WHERE {predicate_to_sql_where(predicate)}"
+                    )
 
     def get_by_ids(self, ids: list[str], /) -> list[Document]:
         """Retrieve documents by their IDs without performing a search.
@@ -1183,7 +1218,7 @@ class VastDBVectorStore(VectorStore):
             match, including typed columns when configured.
         """
         columns = self._select_columns()
-        if self._adbc_available():
+        if self._qe_reads():
             if not ids:
                 return []
             unique_ids = list(dict.fromkeys(ids))
@@ -1343,7 +1378,7 @@ class VastDBVectorStore(VectorStore):
         Raises:
             RuntimeError: If ADBC is not configured and fallback is not allowed.
         """
-        if self._adbc_available():
+        if self._qe_reads():
             try:
                 return self._do_vector_search_adbc(tx, query_vector, k, predicate, **kwargs)
             except (TypeError, ValueError):
@@ -1530,6 +1565,9 @@ class VastDBVectorStore(VectorStore):
                 cursor.execute(query)
                 rows = cursor.fetch_arrow_table().to_pylist()
 
+        # ponytail: NULL-vector rows sort with the Query Engine's NULL order and can eat
+        # LIMIT slots; add `WHERE vec IS NOT NULL` if that ever shows up in practice.
+        rows = [row for row in rows if row[_ADBC_DISTANCE_ALIAS] is not None]
         ids = [row[self._id_column] for row in rows]
         if len(ids) != len(set(ids)):
             _logger.warning(

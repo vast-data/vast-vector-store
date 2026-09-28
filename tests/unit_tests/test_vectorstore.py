@@ -675,15 +675,84 @@ def test_adbc_delete_batches_and_empty_skips_connection(adbc_vectorstore, mock_t
     assert all(" IN (" not in call.args[0] for call in cursor.execute.call_args_list)
 
 
-def test_adbc_delete_error_propagates(adbc_vectorstore, mock_transaction):
+@pytest.mark.parametrize("fallback", [True, False])
+def test_adbc_delete_error_falls_back_only_when_allowed(
+    adbc_vectorstore, mock_transaction, fallback
+):
     mock_transaction.txid = 123
     dbapi = MagicMock()
     dbapi.connect.side_effect = OSError("offline")
+    sdk_table = mock_transaction.table_from_metadata.return_value
     with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi), patch(
-        "langchain_vastdb.vectorstores._fallback_allowed", return_value=True
-    ), pytest.raises(OSError, match="offline"):
+        "langchain_vastdb.vectorstores._fallback_allowed", return_value=fallback
+    ):
+        if fallback:
+            assert adbc_vectorstore._delete_by_ids(["a"]) is True
+            sdk_table.delete.assert_called_once()
+        else:
+            with pytest.raises(OSError, match="offline"):
+                adbc_vectorstore._delete_by_ids(["a"])
+            sdk_table.delete.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("version", "qe_lookup", "qe_delete"),
+    [((5, 3, 2), False, False), ((5, 4, 0), True, False), ((5, 5, 1), True, True)],
+)
+def test_adbc_paths_gated_by_cluster_version(
+    adbc_vectorstore, mock_session, mock_transaction, version, qe_lookup, qe_delete
+):
+    mock_session.features.vast_version = version
+    mock_transaction.txid = 123
+    dbapi = MagicMock()
+    conn = dbapi.connect.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value.__enter__.return_value
+    cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
+    sdk_table = mock_transaction.table_from_metadata.return_value
+    sdk_table.select.return_value.read_all.return_value.to_pylist.return_value = []
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi):
+        adbc_vectorstore._get_by_ids(["a"])
+        assert (cursor.execute.call_count == 1) is qe_lookup
+        assert (sdk_table.select.call_count == 1) is (not qe_lookup)
+        cursor.execute.reset_mock()
         adbc_vectorstore._delete_by_ids(["a"])
-    mock_transaction.table_from_metadata.assert_not_called()
+        assert (cursor.execute.call_count == 1) is qe_delete
+        assert (sdk_table.delete.call_count == 1) is (not qe_delete)
+
+
+def test_select_columns_must_include_id_column(mock_session, fake_embedding):
+    class NoId(VastDBVectorStore):
+        def _select_columns(self):
+            return [self._text_column, self._metadata_column]
+
+    with pytest.raises(ValueError, match="must include the id column 'id'"):
+        NoId(embedding=fake_embedding, session=mock_session, bucket="b", schema="s", table_name="t")
+
+
+def test_adbc_search_uses_index_sql_distance_function(adbc_vectorstore):
+    adbc_vectorstore._table_metadata._vector_index = MagicMock(
+        distance_metric="ip", sql_distance_function="array_inner_product"
+    )
+    dbapi = MagicMock()
+    conn = dbapi.connect.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value.__enter__.return_value
+    cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi):
+        adbc_vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3])
+    assert '-array_inner_product("embedding"::FLOAT[3], ' in cursor.execute.call_args.args[0]
+
+
+def test_adbc_search_skips_null_distance_rows(adbc_vectorstore):
+    dbapi = MagicMock()
+    conn = dbapi.connect.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value.__enter__.return_value
+    cursor.fetch_arrow_table.return_value.to_pylist.return_value = [
+        {"id": "n", "text": "null vec", "metadata": "{}", "_vastdb_distance": None},
+        {"id": "x", "text": "hello", "metadata": "{}", "_vastdb_distance": 0.5},
+    ]
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi):
+        results = adbc_vectorstore._vector_search([0.1, 0.2, 0.3], 4)
+    assert [(row["id"], s) for row, s in results] == [("x", 0.5)]
 
 
 def test_adbc_upsert_delete_and_sdk_insert_share_transaction(
@@ -762,19 +831,6 @@ def test_adbc_get_by_ids_error_fallback(adbc_vectorstore, mock_transaction, allo
             with pytest.raises(OSError, match="offline"):
                 adbc_vectorstore._get_by_ids(["a"])
             sdk_table.select.assert_not_called()
-
-
-def test_adbc_search_uses_index_sql_distance_function(adbc_vectorstore):
-    adbc_vectorstore._table_metadata._vector_index = MagicMock(
-        distance_metric="ip", sql_distance_function="array_inner_product"
-    )
-    dbapi = MagicMock()
-    conn = dbapi.connect.return_value.__enter__.return_value
-    cursor = conn.cursor.return_value.__enter__.return_value
-    cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
-    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi):
-        adbc_vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3])
-    assert '-array_inner_product("embedding"::FLOAT[3], ' in cursor.execute.call_args.args[0]
 
 
 @pytest.mark.parametrize(

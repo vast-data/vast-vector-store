@@ -81,6 +81,9 @@ def _ibis_resolver_to_sql(node: object) -> str:
         col_sql = _ibis_col_sql(node.func.obj)  # type: ignore[attr-defined]  # Attr.obj is an Item
         seq = node.args[0]  # type: ignore[attr-defined]  # Sequence node
         sql_vals = [_ibis_literal_to_sql(v.value) for v in seq.values]
+        # Query Engine rejects `col IN (...)` ("HASH_JOIN ... not supported"),
+        # so membership is rendered as an equality chain. Chains of 2000 terms
+        # verified on VAST 5.5.1.
         if method == "isin":
             return (
                 "1=0" if not sql_vals
