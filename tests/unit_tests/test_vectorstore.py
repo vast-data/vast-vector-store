@@ -639,7 +639,7 @@ def adbc_vectorstore(mock_session, fake_embedding, mock_transaction):
 def test_adbc_delete_joins_tx_and_closes_before_commit(
     adbc_vectorstore, mock_transaction, mock_session
 ):
-    mock_transaction.txid = 123
+    mock_transaction.active_txid = 123
     events = []
     dbapi = MagicMock()
     conn_cm = dbapi.connect.return_value
@@ -662,7 +662,7 @@ def test_adbc_delete_joins_tx_and_closes_before_commit(
 
 
 def test_adbc_delete_batches_and_empty_skips_connection(adbc_vectorstore, mock_transaction):
-    mock_transaction.txid = 123
+    mock_transaction.active_txid = 123
     dbapi = MagicMock()
     conn = dbapi.connect.return_value.__enter__.return_value
     cursor = conn.cursor.return_value.__enter__.return_value
@@ -679,7 +679,7 @@ def test_adbc_delete_batches_and_empty_skips_connection(adbc_vectorstore, mock_t
 def test_adbc_delete_error_falls_back_only_when_allowed(
     adbc_vectorstore, mock_transaction, fallback
 ):
-    mock_transaction.txid = 123
+    mock_transaction.active_txid = 123
     dbapi = MagicMock()
     dbapi.connect.side_effect = OSError("offline")
     sdk_table = mock_transaction.table_from_metadata.return_value
@@ -703,7 +703,7 @@ def test_adbc_paths_gated_by_cluster_version(
     adbc_vectorstore, mock_session, mock_transaction, version, qe_lookup, qe_delete
 ):
     mock_session.features.vast_version = version
-    mock_transaction.txid = 123
+    mock_transaction.active_txid = 123
     dbapi = MagicMock()
     conn = dbapi.connect.return_value.__enter__.return_value
     cursor = conn.cursor.return_value.__enter__.return_value
@@ -777,7 +777,7 @@ def test_adbc_search_skips_null_distance_rows(adbc_vectorstore):
 def test_adbc_upsert_delete_and_sdk_insert_share_transaction(
     adbc_vectorstore, mock_transaction, mock_session
 ):
-    mock_transaction.txid = 123
+    mock_transaction.active_txid = 123
     dbapi = MagicMock()
     conn = dbapi.connect.return_value.__enter__.return_value
     cursor = conn.cursor.return_value.__enter__.return_value
@@ -816,7 +816,7 @@ def test_adbc_get_by_ids_batches_dedupes_and_uses_one_connection(adbc_vectorstor
 
 
 def test_adbc_get_by_ids_empty_and_tx_join(adbc_vectorstore, mock_transaction):
-    mock_transaction.txid = 123
+    mock_transaction.active_txid = 123
     dbapi = MagicMock()
     conn = dbapi.connect.return_value.__enter__.return_value
     cursor = conn.cursor.return_value.__enter__.return_value

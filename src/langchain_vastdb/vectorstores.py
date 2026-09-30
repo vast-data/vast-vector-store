@@ -1166,7 +1166,7 @@ class VastDBVectorStore(VectorStore):
     def _delete_by_ids_adbc(self, ids: list[str], tx: Transaction) -> None:
         """Batched Query Engine DELETEs joined to *tx* via ``vast.db.external_txid``."""
         with self._open_adbc_connection(
-            adbc_conn_kwargs_overrides={_ADBC_TXID_PROPERTY: str(tx.txid)}
+            adbc_conn_kwargs_overrides={_ADBC_TXID_PROPERTY: str(tx.active_txid)}
         ) as conn:
             with conn.cursor() as cursor:
                 for start in range(0, len(ids), _ADBC_ID_BATCH):
@@ -1226,7 +1226,7 @@ class VastDBVectorStore(VectorStore):
                 return []
             unique_ids = list(dict.fromkeys(ids))
             conn_kwargs = (
-                {"adbc_conn_kwargs_overrides": {_ADBC_TXID_PROPERTY: str(tx.txid)}}
+                {"adbc_conn_kwargs_overrides": {_ADBC_TXID_PROPERTY: str(tx.active_txid)}}
                 if tx is not None else {}
             )
             try:
