@@ -326,16 +326,19 @@ class VastDBVectorStore(VectorStore):
         self._table_metadata = TableMetadata(ref=self._table_ref)
         self._metadata_loaded = False
 
-        core_columns = {id_column, text_column, vector_column, metadata_column}
+        core_columns = {
+            id_column, text_column, vector_column, metadata_column, _ADBC_DISTANCE_ALIAS,
+        }
         conflicts = core_columns & set(self._typed_metadata_columns)
         if conflicts:
             raise ValueError(
-                f"Typed column names conflict with core columns: {sorted(conflicts)}"
+                f"Typed column names conflict with reserved columns: {sorted(conflicts)}"
             )
-        if id_column not in self._select_columns():
+        selected = self._select_columns()
+        if id_column not in selected:
             raise ValueError(
                 f"_select_columns() must include the id column {id_column!r}; "
-                f"got {self._select_columns()!r}. Search and lookup map rows back to "
+                f"got {selected!r}. Search and lookup map rows back to "
                 f"Document.id by this column, so a subclass override cannot drop it."
             )
 

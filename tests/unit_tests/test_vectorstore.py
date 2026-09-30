@@ -728,6 +728,17 @@ def test_adbc_search_on_old_cluster_names_version_in_error(adbc_vectorstore, moc
         adbc_vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3])
 
 
+def test_typed_column_cannot_use_distance_alias(mock_session, fake_embedding):
+    class Clash(VastDBVectorStore):
+        _typed_metadata_columns = {"_vastdb_distance": TypedColumn()}
+
+    with pytest.raises(ValueError, match="_vastdb_distance"):
+        Clash(
+            embedding=fake_embedding, session=mock_session,
+            bucket="b", schema="s", table_name="t",
+        )
+
+
 def test_select_columns_must_include_id_column(mock_session, fake_embedding):
     class NoId(VastDBVectorStore):
         def _select_columns(self):
