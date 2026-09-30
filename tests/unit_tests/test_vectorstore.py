@@ -696,11 +696,11 @@ def test_adbc_delete_error_falls_back_only_when_allowed(
 
 
 @pytest.mark.parametrize(
-    ("version", "qe_lookup", "qe_delete"),
+    ("version", "qe_read", "qe_delete"),
     [((5, 3, 2), False, False), ((5, 4, 0), True, False), ((5, 5, 1), True, True)],
 )
 def test_adbc_paths_gated_by_cluster_version(
-    adbc_vectorstore, mock_session, mock_transaction, version, qe_lookup, qe_delete
+    adbc_vectorstore, mock_session, mock_transaction, version, qe_read, qe_delete
 ):
     mock_session.features.vast_version = version
     mock_transaction.active_txid = 123
@@ -710,10 +710,16 @@ def test_adbc_paths_gated_by_cluster_version(
     cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
     sdk_table = mock_transaction.table_from_metadata.return_value
     sdk_table.select.return_value.read_all.return_value.to_pylist.return_value = []
-    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi):
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi), patch(
+        "langchain_vastdb.vectorstores._fallback_allowed", return_value=True
+    ), patch.object(adbc_vectorstore, "_do_vector_search_fallback", return_value=[]) as fb:
+        adbc_vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3])
+        assert (cursor.execute.call_count == 1) is qe_read
+        assert (fb.call_count == 1) is (not qe_read)
+        cursor.execute.reset_mock()
         adbc_vectorstore._get_by_ids(["a"])
-        assert (cursor.execute.call_count == 1) is qe_lookup
-        assert (sdk_table.select.call_count == 1) is (not qe_lookup)
+        assert (cursor.execute.call_count == 1) is qe_read
+        assert (sdk_table.select.call_count == 1) is (not qe_read)
         cursor.execute.reset_mock()
         adbc_vectorstore._delete_by_ids(["a"])
         assert (cursor.execute.call_count == 1) is qe_delete
@@ -726,6 +732,22 @@ def test_adbc_search_on_old_cluster_names_version_in_error(adbc_vectorstore, moc
         pytest.raises(RuntimeError, match=r"requires VAST 5\.4\+; the cluster reports 5\.3\.2")
     ):
         adbc_vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3])
+
+
+def test_adbc_search_loads_index_metadata_before_building_sql(adbc_vectorstore):
+    def load(tx):
+        adbc_vectorstore._table_metadata._vector_index = MagicMock(
+            distance_metric="ip", sql_distance_function="array_inner_product"
+        )
+
+    adbc_vectorstore._table_metadata.load.side_effect = load
+    dbapi = MagicMock()
+    conn = dbapi.connect.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value.__enter__.return_value
+    cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi):
+        adbc_vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3])
+    assert "-array_inner_product(" in cursor.execute.call_args.args[0]
 
 
 def test_typed_column_cannot_use_distance_alias(mock_session, fake_embedding):
@@ -2132,7 +2154,7 @@ def test_adbc_cosine_metric_uses_cosine_distance_sql(
 def test_adbc_ip_metric_uses_inner_product_sql(
     mock_session, fake_embedding, mock_transaction
 ):
-    """distance_metric='ip' produces inner_product() in the SQL."""
+    """distance_metric='ip' without an index produces negated array_inner_product()."""
     store = VastDBVectorStore(
         embedding=fake_embedding,
         session=mock_session,
@@ -2160,7 +2182,7 @@ def test_adbc_ip_metric_uses_inner_product_sql(
         )
 
     executed_sql = mock_cursor.execute.call_args[0][0]
-    assert "inner_product(" in executed_sql
+    assert '-array_inner_product("embedding"::FLOAT[3], ' in executed_sql
     assert "array_distance(" not in executed_sql
 
 
