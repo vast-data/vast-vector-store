@@ -22,6 +22,7 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
 from vastdb.table_metadata import TableMetadata, TableRef
+from vastdb.transaction import NoAdbcConnectionError
 
 from langchain_vastdb._ibis_sql import predicate_to_sql_where
 
@@ -96,17 +97,14 @@ def _quote_ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-def _adbc_error_types() -> tuple[type[BaseException], ...]:
-    from vastdb.transaction import NoAdbcConnectionError
+try:
+    from adbc_driver_manager import Error as _AdbcError
 
-    errors: tuple[type[BaseException], ...] = (NoAdbcConnectionError, ImportError, OSError)
-    try:
-        from adbc_driver_manager import Error as AdbcError
-
-        errors += (AdbcError,)
-    except ImportError:
-        pass
-    return errors
+    _ADBC_ERRORS: tuple[type[BaseException], ...] = (
+        NoAdbcConnectionError, ImportError, OSError, _AdbcError,
+    )
+except ImportError:
+    _ADBC_ERRORS = (NoAdbcConnectionError, ImportError, OSError)
 
 
 def _get_adbc_dbapi() -> types.ModuleType:
@@ -1148,7 +1146,7 @@ class VastDBVectorStore(VectorStore):
                 try:
                     self._delete_by_ids_adbc(ids, active_tx)
                     return True
-                except _adbc_error_types() as exc:
+                except _ADBC_ERRORS as exc:
                     if not _fallback_allowed():
                         raise
                     _logger.warning(
@@ -1244,7 +1242,7 @@ class VastDBVectorStore(VectorStore):
                             )
                             rows.extend(cursor.fetch_arrow_table().to_pylist())
                 return rows
-            except _adbc_error_types() as exc:
+            except _ADBC_ERRORS as exc:
                 if not _fallback_allowed():
                     raise
                 _logger.warning(
@@ -1386,7 +1384,7 @@ class VastDBVectorStore(VectorStore):
                 return self._do_vector_search_adbc(tx, query_vector, k, predicate, **kwargs)
             except (TypeError, ValueError):
                 raise
-            except _adbc_error_types() as exc:
+            except _ADBC_ERRORS as exc:
                 if not _fallback_allowed():
                     raise
                 _logger.warning(
