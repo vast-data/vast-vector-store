@@ -720,6 +720,14 @@ def test_adbc_paths_gated_by_cluster_version(
         assert (sdk_table.delete.call_count == 1) is (not qe_delete)
 
 
+def test_adbc_search_on_old_cluster_names_version_in_error(adbc_vectorstore, mock_session):
+    mock_session.features.vast_version = (5, 3, 2)
+    with patch("langchain_vastdb.vectorstores._fallback_allowed", return_value=False), (
+        pytest.raises(RuntimeError, match=r"requires VAST 5\.4\+; the cluster reports 5\.3\.2")
+    ):
+        adbc_vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3])
+
+
 def test_select_columns_must_include_id_column(mock_session, fake_embedding):
     class NoId(VastDBVectorStore):
         def _select_columns(self):

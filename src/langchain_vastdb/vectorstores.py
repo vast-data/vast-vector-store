@@ -285,10 +285,10 @@ class VastDBVectorStore(VectorStore):
             metadata_column: Column name for document metadata. Defaults to ``"metadata"``.
             adbc_driver_path: Path to ``libadbc_driver_vastdb.so``. When set
                 together with ``adbc_endpoint``, ``access_key``, and
-                ``secret_key``, enables native ADBC vector search via
-                ``array_distance()`` SQL (no vector index required). When ADBC
-                is not configured, vector search raises ``RuntimeError`` unless
-                the ``VASTDB_ALLOW_FALLBACK`` env var is set (development only).
+                ``secret_key``, routes search and lookup through Query Engine
+                SQL on VAST 5.4+ and delete on 5.5+ (a vector index is optional).
+                When ADBC is not configured, vector search raises ``RuntimeError``
+                unless the ``VASTDB_ALLOW_FALLBACK`` env var is set (development only).
             adbc_endpoint: Full ADBC/QueryEngine endpoint URL, e.g.
                 ``"http://query-engine.example.com:80"``. This is separate
                 from the HTTP REST endpoint.
@@ -1318,9 +1318,9 @@ class VastDBVectorStore(VectorStore):
     ) -> list[tuple[dict, float]]:
         """Search VastDB for similar vectors.
 
-        Primary path: ADBC SQL with ``array_distance()`` (server-side, no
-        vector index required). Fallback: in-memory L2Sq scan. Subclasses
-        can override this hook to customise search behaviour.
+        Primary path: one Query Engine (ADBC) query, joined to the SDK
+        transaction. Fallback: in-memory scan with the resolved metric.
+        Subclasses can override this hook to customise search behaviour.
 
         Args:
             query_vector: The query embedding vector.
@@ -1354,8 +1354,8 @@ class VastDBVectorStore(VectorStore):
     ) -> list[tuple[dict, float]]:
         """Execute the vector search within a transaction.
 
-        Uses ADBC ``array_distance()`` SQL when configured. Falls back to an
-        in-memory L2Sq scan only when ADBC is unavailable/fails AND the
+        Uses Query Engine (ADBC) SQL when configured on VAST 5.4+. Falls back to
+        an in-memory scan only when ADBC is unavailable/fails AND the
         ``VASTDB_ALLOW_FALLBACK`` env var is set to a truthy value.
 
         Args:
@@ -1387,11 +1387,17 @@ class VastDBVectorStore(VectorStore):
                 if not _fallback_allowed():
                     raise
                 _logger.warning(
-                    "ADBC vector search failed (%s: %s); falling back to in-memory L2Sq scan.",
+                    "ADBC vector search failed (%s: %s); falling back to in-memory scan.",
                     type(exc).__name__,
                     exc,
                 )
         elif not _fallback_allowed():
+            if self._adbc_available():
+                raise RuntimeError(
+                    "Query Engine search requires VAST 5.4+; the cluster reports "
+                    f"{'.'.join(map(str, self._vast_version()))}. Set "
+                    "VASTDB_ALLOW_FALLBACK=1 for in-memory search (development only)."
+                )
             raise RuntimeError(
                 "ADBC is not configured. Vector search requires a Query Engine "
                 "(ADBC) connection. Provide adbc_driver_path, adbc_endpoint, "
