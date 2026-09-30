@@ -1547,7 +1547,8 @@ class VastDBVectorStore(VectorStore):
         """Fetch ranked document columns and distance in one ADBC query.
 
         Args:
-            tx: Active SDK transaction retained for hook compatibility; unused by ADBC.
+            tx: Active SDK transaction; the ADBC read joins it via
+                ``vast.db.external_txid`` so it sees the transaction's own writes.
             query_vector: The query embedding vector.
             k: Maximum number of results.
             predicate: Optional ibis predicate converted via ``_build_adbc_where_clause``.
@@ -1569,7 +1570,13 @@ class VastDBVectorStore(VectorStore):
             f"FROM {self._adbc_table_path()} {where_clause} "
             f"ORDER BY {alias} LIMIT {k}"
         )
-        with self._open_adbc_connection(**kwargs) as conn:
+        conn_overrides = {
+            _ADBC_TXID_PROPERTY: str(tx.active_txid),
+            **(kwargs.get("adbc_conn_kwargs_overrides") or {}),
+        }
+        with self._open_adbc_connection(
+            **{**kwargs, "adbc_conn_kwargs_overrides": conn_overrides}
+        ) as conn:
             with conn.cursor() as cursor:
                 cursor.execute(query)
                 rows = cursor.fetch_arrow_table().to_pylist()

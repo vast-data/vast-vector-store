@@ -750,6 +750,17 @@ def test_adbc_search_loads_index_metadata_before_building_sql(adbc_vectorstore):
     assert "-array_inner_product(" in cursor.execute.call_args.args[0]
 
 
+def test_adbc_search_joins_sdk_transaction(adbc_vectorstore, mock_transaction):
+    mock_transaction.active_txid = 123
+    dbapi = MagicMock()
+    conn = dbapi.connect.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value.__enter__.return_value
+    cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi):
+        adbc_vectorstore._vector_search([0.1, 0.2, 0.3], 4, tx=mock_transaction)
+    assert dbapi.connect.call_args.kwargs["conn_kwargs"] == {"vast.db.external_txid": "123"}
+
+
 def test_typed_column_cannot_use_distance_alias(mock_session, fake_embedding):
     class Clash(VastDBVectorStore):
         _typed_metadata_columns = {"_vastdb_distance": TypedColumn()}
@@ -2051,7 +2062,7 @@ def test_open_adbc_connection_override(
 
     class CustomConnStore(VastDBVectorStore):
         @__import__("contextlib").contextmanager
-        def _open_adbc_connection(self):
+        def _open_adbc_connection(self, **kwargs):
             yield mock_conn
 
     store = CustomConnStore(
@@ -2097,6 +2108,7 @@ def test_adbc_conn_kwargs_passed_to_connect(
     store._table_metadata = MagicMock()
     store._table_metadata._vector_index = None
     mock_transaction.table_from_metadata.return_value = MagicMock()
+    mock_transaction.active_txid = 7
 
     mock_dbapi = MagicMock()
     cm = mock_dbapi.connect.return_value.__enter__.return_value
@@ -2108,7 +2120,9 @@ def test_adbc_conn_kwargs_passed_to_connect(
             mock_transaction, [0.1, 0.2, 0.3], k=4, predicate=None
         )
 
-    assert mock_dbapi.connect.call_args[1]["conn_kwargs"] == {"timeout": 30}
+    assert mock_dbapi.connect.call_args[1]["conn_kwargs"] == {
+        "timeout": 30, "vast.db.external_txid": "7",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -2525,6 +2539,7 @@ def test_adbc_conn_kwargs_overrides_merged_per_call(
     store._table_metadata = MagicMock()
     store._table_metadata._vector_index = None
     mock_transaction.table_from_metadata.return_value = MagicMock()
+    mock_transaction.active_txid = 7
 
     mock_dbapi = MagicMock()
     cm_conn = mock_dbapi.connect.return_value.__enter__.return_value
@@ -2539,7 +2554,7 @@ def test_adbc_conn_kwargs_overrides_merged_per_call(
         )
 
     conn_kwargs = mock_dbapi.connect.call_args[1]["conn_kwargs"]
-    assert conn_kwargs == {"timeout": 5, "tls": True}
+    assert conn_kwargs == {"timeout": 5, "tls": True, "vast.db.external_txid": "7"}
 
 
 def test_unknown_search_kwargs_are_tolerated(
