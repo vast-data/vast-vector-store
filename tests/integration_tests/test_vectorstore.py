@@ -227,6 +227,20 @@ class TestVastDBVectorStoreSync(VectorStoreIntegrationTests):
             "All scores are 0.0 — $distance passthrough from table.vector_search may be broken"
         )
 
+    def test_reads_on_one_store_see_later_writes_and_deletes(
+        self, vectorstore: VectorStore
+    ) -> None:
+        """The first read caches the autocommit ADBC connection; later reads on it
+        must see SDK inserts and deletes made after it was opened."""
+        doc_id = "raw-1"
+        assert vectorstore.get_by_ids([doc_id]) == []
+        vectorstore.add_texts(["read after write"], ids=[doc_id])
+        assert [d.id for d in vectorstore.get_by_ids([doc_id])] == [doc_id]
+        query = vectorstore.embeddings.embed_query("read after write")
+        assert [d.id for d in vectorstore.similarity_search_by_vector(query, k=1)] == [doc_id]
+        vectorstore.delete([doc_id])
+        assert vectorstore.get_by_ids([doc_id]) == []
+
     # -----------------------------------------------------------------------
     # Story 3.2: Retriever & RAG chain integration validation
     # -----------------------------------------------------------------------
