@@ -2,6 +2,7 @@
 
 import json
 import logging
+import types
 import uuid
 from unittest.mock import MagicMock, patch
 
@@ -629,6 +630,7 @@ def adbc_vectorstore(mock_session, fake_embedding, mock_transaction):
         secret_key="sk",
         distance_metric="l2sq",
     )
+    mock_session.features.vast_version = (5, 5, 1)
     store._table_metadata = MagicMock()
     store._table_metadata._vector_index = None
     mock_table = MagicMock()
@@ -883,6 +885,33 @@ def test_adbc_get_by_ids_error_fallback(adbc_vectorstore, mock_transaction, allo
             with pytest.raises(OSError, match="offline"):
                 adbc_vectorstore._get_by_ids(["a"])
             sdk_table.select.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "features", [types.SimpleNamespace(), types.SimpleNamespace(vast_version="5.5.1")]
+)
+def test_adbc_unknown_version_reads_on_qe_and_deletes_via_sdk(
+    adbc_vectorstore, mock_session, mock_transaction, caplog, features
+):
+    mock_session.features = features
+    mock_transaction.active_txid = 123
+    dbapi = MagicMock()
+    conn = dbapi.connect.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value.__enter__.return_value
+    cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
+    sdk_table = mock_transaction.table_from_metadata.return_value
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi), (
+        caplog.at_level(logging.WARNING, logger="langchain_vastdb.vectorstores")
+    ):
+        adbc_vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3])
+        adbc_vectorstore._get_by_ids(["a"])
+        adbc_vectorstore._delete_by_ids(["a"])
+        adbc_vectorstore._delete_by_ids(["b"])
+    sqls = [call.args[0] for call in cursor.execute.call_args_list]
+    assert len(sqls) == 2 and all(sql.startswith("SELECT") for sql in sqls)
+    assert sdk_table.delete.call_count == 2
+    assert sdk_table.select.call_args.kwargs["internal_row_id"] is True
+    assert sum("unknown VAST version" in r.getMessage() for r in caplog.records) == 1
 
 
 @pytest.mark.parametrize(

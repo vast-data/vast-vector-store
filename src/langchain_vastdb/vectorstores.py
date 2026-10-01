@@ -319,6 +319,7 @@ class VastDBVectorStore(VectorStore):
         self._secret_key = secret_key or os.environ.get("AWS_SECRET_ACCESS_KEY")
         self._distance_metric = distance_metric
         self._adbc_conn_kwargs = adbc_conn_kwargs
+        self._warned_unknown_version = False
 
         self._table_ref = TableRef(bucket=bucket, schema=schema, table=table_name)
         self._table_metadata = TableMetadata(ref=self._table_ref)
@@ -340,22 +341,34 @@ class VastDBVectorStore(VectorStore):
                 f"Document.id by this column, so a subclass override cannot drop it."
             )
 
-    def _vast_version(self) -> tuple[int, ...]:
-        """Cluster version from the SDK session, e.g. ``(5, 5, 1)``.
-
-        Unknown (mocked or pre-populated sessions) is treated as newest so the
-        ADBC gates below don't silently disable configured Query Engine paths.
-        """
+    def _vast_version(self) -> tuple[int, ...] | None:
+        """Cluster version from the SDK session, e.g. ``(5, 5, 1)``; ``None`` if unknown."""
         v = getattr(getattr(self._session, "features", None), "vast_version", None)
-        return v if isinstance(v, tuple) else (99,)
+        return v if isinstance(v, tuple) else None
 
     def _qe_reads(self) -> bool:
-        """Query Engine SELECT (search, lookup): ADBC configured and VAST 5.4+."""
-        return self._adbc_available() and self._vast_version() >= (5, 4)
+        """Query Engine SELECT (search, lookup): ADBC configured and VAST 5.4+ or unknown.
+
+        Unknown keeps reads on the Query Engine: the brute-force SELECT is the
+        same SQL on every Query Engine version.
+        """
+        version = self._vast_version()
+        return self._adbc_available() and (version is None or version >= (5, 4))
 
     def _qe_writes(self) -> bool:
-        """Query Engine DELETE: ADBC configured and VAST 5.5+ (DML verified on 5.5.1 only)."""
-        return self._adbc_available() and self._vast_version() >= (5, 5)
+        """Query Engine DELETE: ADBC configured and a known VAST 5.5+ (verified on 5.5.1 only)."""
+        if not self._adbc_available():
+            return False
+        version = self._vast_version()
+        if version is None:
+            if not self._warned_unknown_version:
+                self._warned_unknown_version = True
+                _logger.warning(
+                    "Query Engine DELETE disabled: unknown VAST version on the SDK "
+                    "session; deletes use the SDK path."
+                )
+            return False
+        return version >= (5, 5)
 
     @classmethod
     def from_connection_params(
@@ -1355,7 +1368,8 @@ class VastDBVectorStore(VectorStore):
     ) -> list[tuple[dict, float]]:
         """Execute the vector search within a transaction.
 
-        Uses Query Engine (ADBC) SQL when configured on VAST 5.4+. Falls back to
+        Uses Query Engine (ADBC) SQL when configured on VAST 5.4+ (or an unknown
+        version). Falls back to
         an in-memory scan only when ADBC is unavailable/fails AND the
         ``VASTDB_ALLOW_FALLBACK`` env var is set to a truthy value.
 
@@ -1396,7 +1410,7 @@ class VastDBVectorStore(VectorStore):
             if self._adbc_available():
                 raise RuntimeError(
                     "Query Engine search requires VAST 5.4+; the cluster reports "
-                    f"{'.'.join(map(str, self._vast_version()))}. Set "
+                    f"{'.'.join(map(str, self._vast_version() or ()))}. Set "
                     "VASTDB_ALLOW_FALLBACK=1 for in-memory search (development only)."
                 )
             raise RuntimeError(

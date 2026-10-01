@@ -24,6 +24,7 @@ native vector indexing.
   | 5.3 | SDK in-memory scan (`VASTDB_ALLOW_FALLBACK=1` required) | SDK | SDK | no Query Engine |
   | 5.4 | Query Engine, brute force | Query Engine | SDK | not live-tested; Query Engine DML unverified |
   | 5.5 | Query Engine, vector index when built | Query Engine | Query Engine | verified on 5.5.1 |
+  | unknown | Query Engine | Query Engine | SDK | session reports no version; one warning per store |
 
   Configuring ADBC on a 5.3 cluster is harmless: lookup and delete stay on the SDK.
 - `vastdb` SDK >= 2.0.3
