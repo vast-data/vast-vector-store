@@ -86,8 +86,9 @@ store = VastDBVectorStore.from_connection_params(
 )
 ```
 
-Credentials are passed directly to `vastdb.connect()` and are **not** stored on
-the instance.
+Credentials are passed to `vastdb.connect()` for the SDK session. They are also
+kept on the instance as private attributes (`_access_key`, `_secret_key`) so the
+ADBC Query Engine connection can reuse them; they are never exposed publicly.
 
 ### Option 3: Create a store and add texts in one call
 
