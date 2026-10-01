@@ -1,7 +1,9 @@
 """Unit tests for VastDBVectorStore using mocked VastDB SDK calls."""
 
+import contextlib
 import json
 import logging
+import threading
 import types
 import uuid
 from unittest.mock import MagicMock, patch
@@ -887,6 +889,124 @@ def test_adbc_get_by_ids_error_fallback(adbc_vectorstore, mock_transaction, allo
             sdk_table.select.assert_not_called()
 
 
+def _adbc_dbapi_mock():
+    """dbapi mock whose connect() returns a distinct context manager per call (``.cms``)."""
+    dbapi = MagicMock()
+    dbapi.cms = []
+
+    def connect(**kwargs):
+        cm = MagicMock()
+        cursor = cm.__enter__.return_value.cursor.return_value.__enter__.return_value
+        cursor.fetch_arrow_table.return_value.to_pylist.return_value = []
+        dbapi.cms.append(cm)
+        return cm
+
+    dbapi.connect.side_effect = connect
+    return dbapi
+
+
+def test_adbc_reads_reuse_one_autocommit_connection(adbc_vectorstore):
+    dbapi = _adbc_dbapi_mock()
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi):
+        for _ in range(3):
+            adbc_vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3])
+            adbc_vectorstore._get_by_ids(["a"])
+    dbapi.connect.assert_called_once()
+    assert dbapi.connect.call_args.kwargs["autocommit"] is True
+    assert "conn_kwargs" not in dbapi.connect.call_args.kwargs
+    dbapi.cms[0].__exit__.assert_not_called()
+
+
+def test_adbc_reads_connect_once_per_thread(adbc_vectorstore):
+    dbapi = _adbc_dbapi_mock()
+    errors = []
+
+    def worker():
+        try:
+            for _ in range(3):
+                adbc_vectorstore._get_by_ids(["a"])
+        except BaseException as exc:  # Thread swallows exceptions; surface them.
+            errors.append(exc)
+
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi):
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    assert errors == []
+    assert dbapi.connect.call_count == 2
+
+
+def test_adbc_dead_cached_connection_is_dropped_and_reconnected(adbc_vectorstore):
+    dbapi = _adbc_dbapi_mock()
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi), patch(
+        "langchain_vastdb.vectorstores._fallback_allowed", return_value=False
+    ):
+        adbc_vectorstore._get_by_ids(["a"])
+        dead = dbapi.cms[0]
+        dead.__enter__.return_value.cursor.return_value.__enter__.return_value.execute \
+            .side_effect = OSError("connection reset")
+        dead.__exit__.side_effect = RuntimeError("close failed")  # suppressed
+        with pytest.raises(OSError, match="connection reset"):
+            adbc_vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3])
+        dead.__exit__.assert_called_once()
+        assert adbc_vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3]) == []
+    assert dbapi.connect.call_count == 2
+    dbapi.cms[1].__enter__.return_value.cursor.return_value.__enter__.return_value \
+        .execute.assert_called_once()
+
+
+def test_adbc_search_with_loaded_metadata_opens_no_sdk_transaction(
+    adbc_vectorstore, mock_session
+):
+    adbc_vectorstore._metadata_loaded = True
+    dbapi = _adbc_dbapi_mock()
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi):
+        adbc_vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3])
+    mock_session.transaction.assert_not_called()
+    dbapi.connect.assert_called_once()
+
+
+def test_adbc_caller_tx_uses_dedicated_joined_connection(
+    adbc_vectorstore, mock_session, mock_transaction
+):
+    mock_transaction.active_txid = 123
+    dbapi = _adbc_dbapi_mock()
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi):
+        adbc_vectorstore._get_by_ids(["a"])  # populates the cache
+        adbc_vectorstore._vector_search([0.1, 0.2, 0.3], 4, tx=mock_transaction)
+        adbc_vectorstore._get_by_ids(["a"], tx=mock_transaction)
+        adbc_vectorstore._delete_by_ids(["a"], tx=mock_transaction)
+    cached, *joined = dbapi.cms
+    assert len(joined) == 3
+    for call, cm in zip(dbapi.connect.call_args_list[1:], joined):
+        assert call.kwargs["conn_kwargs"] == {"vast.db.external_txid": "123"}
+        assert "autocommit" not in call.kwargs
+        cm.__exit__.assert_called_once()
+    cached.__exit__.assert_not_called()
+    assert adbc_vectorstore._adbc_local.conn is cached.__enter__.return_value
+    mock_session.transaction.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"adbc_db_kwargs_overrides": {"vast.db.access_key": "user-ak"}},
+        {"adbc_conn_kwargs_overrides": {"timeout": 5}},
+    ],
+)
+def test_adbc_per_call_overrides_connect_fresh(adbc_vectorstore, overrides):
+    dbapi = _adbc_dbapi_mock()
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi):
+        adbc_vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3], **overrides)
+        adbc_vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3], **overrides)
+    assert dbapi.connect.call_count == 2
+    assert all("autocommit" not in call.kwargs for call in dbapi.connect.call_args_list)
+    assert all(cm.__exit__.call_count == 1 for cm in dbapi.cms)
+    assert getattr(adbc_vectorstore._adbc_local, "conn", None) is None
+
+
 @pytest.mark.parametrize(
     "features", [types.SimpleNamespace(), types.SimpleNamespace(vast_version="5.5.1")]
 )
@@ -912,6 +1032,34 @@ def test_adbc_unknown_version_reads_on_qe_and_deletes_via_sdk(
     assert sdk_table.delete.call_count == 2
     assert sdk_table.select.call_args.kwargs["internal_row_id"] is True
     assert sum("unknown VAST version" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_open_adbc_connection_override_fresh_per_call(
+    mock_session, fake_embedding, mock_transaction
+):
+    """An override yielding a fresh connect() per call (no super) connects every call."""
+    dbapi = _adbc_dbapi_mock()
+
+    class FreshConnStore(VastDBVectorStore):
+        @contextlib.contextmanager
+        def _open_adbc_connection(self, **kwargs):
+            with dbapi.connect(driver="d") as conn:
+                yield conn
+
+    store = FreshConnStore(
+        embedding=fake_embedding, session=mock_session,
+        bucket="b", schema="s", table_name="t",
+        adbc_driver_path="/path/to/driver.so", adbc_endpoint="localhost:8080",
+        access_key="ak", secret_key="sk", distance_metric="l2sq",
+    )
+    store._table_metadata = MagicMock()
+    store._table_metadata._vector_index = None
+    mock_session.features.vast_version = (5, 5, 1)
+    store.similarity_search_by_vector([0.1, 0.2, 0.3])
+    store._get_by_ids(["a"])
+    store._delete_by_ids(["a"])
+    assert dbapi.connect.call_count == 3
+    assert all(cm.__exit__.call_count == 1 for cm in dbapi.cms)
 
 
 @pytest.mark.parametrize(
@@ -2583,7 +2731,7 @@ def test_adbc_conn_kwargs_overrides_merged_per_call(
         )
 
     conn_kwargs = mock_dbapi.connect.call_args[1]["conn_kwargs"]
-    assert conn_kwargs == {"timeout": 5, "tls": True, "vast.db.external_txid": "7"}
+    assert conn_kwargs == {"timeout": 5, "tls": True}  # no tx: search does not join
 
 
 def test_unknown_search_kwargs_are_tolerated(

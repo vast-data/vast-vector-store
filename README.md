@@ -253,6 +253,9 @@ until the index is built. See the version table under Requirements for which
 operations use the Query Engine on 5.3, 5.4 and 5.5. Without ADBC, lookup and
 delete retain their SDK paths. With `VASTDB_ALLOW_FALLBACK=1`, search, lookup
 and delete all fall back to the SDK on ADBC errors; otherwise errors propagate.
+Search and lookup without a transaction or per-call overrides reuse one
+autocommit connection per store per thread, reconnecting after an error; calls
+given `tx` and delete use a dedicated connection joined to the transaction.
 
 Unfiltered `count()` uses cached table stats, which may lag recent writes or
 over-count while a table settles. Use `count(predicate)` for an exact count;
@@ -338,7 +341,11 @@ def _row_to_document(
 
 Override `_open_adbc_connection(self, **kwargs)` with `**kwargs` even if your
 subclass currently ignores them: joined operations pass
-`adbc_conn_kwargs_overrides={"vast.db.external_txid": str(tx.txid)}`.
+`adbc_conn_kwargs_overrides={"vast.db.external_txid": str(tx.active_txid)}`.
+The base implementation caches a connection when no overrides are passed; an
+override that opens a fresh connection per call bypasses that cache.
+Overrides of `_do_vector_search` and `_do_vector_search_adbc` receive
+`tx=None` when the caller passes no transaction.
 
 ### Transaction reuse
 

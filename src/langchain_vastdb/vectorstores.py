@@ -6,11 +6,12 @@ import json
 import logging
 import math
 import os
+import threading
 import time
 import types
 import uuid
 from collections import Counter
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
@@ -213,10 +214,13 @@ class VastDBVectorStore(VectorStore):
     - ``_get_table`` — customize table acquisition (e.g., create-on-first-use, table-level options)
 
     Overrides of ``_open_adbc_connection`` should accept ``**kwargs``: search
-    forwards per-call options, and joined delete/lookups pass the SDK transaction
-    ID through ``adbc_conn_kwargs_overrides``. With ADBC configured, search,
-    lookup, and delete use Query Engine SQL; upsert deletes and SDK Arrow inserts
-    within one transaction. Without ADBC, the existing SDK paths remain.
+    forwards per-call options, and calls given ``tx`` (search, lookup) and delete
+    pass the SDK transaction ID through ``adbc_conn_kwargs_overrides``. With
+    ADBC configured, search, lookup, and delete use Query Engine SQL; upsert
+    deletes and SDK Arrow inserts within one transaction. Without ADBC, the
+    existing SDK paths remain. Calls
+    without a transaction or per-call overrides reuse one autocommit connection
+    per store per thread; joined calls get a dedicated connection.
 
     Example:
         .. code-block:: python
@@ -319,6 +323,7 @@ class VastDBVectorStore(VectorStore):
         self._secret_key = secret_key or os.environ.get("AWS_SECRET_ACCESS_KEY")
         self._distance_metric = distance_metric
         self._adbc_conn_kwargs = adbc_conn_kwargs
+        self._adbc_local = threading.local()
         self._warned_unknown_version = False
 
         self._table_ref = TableRef(bucket=bucket, schema=schema, table=table_name)
@@ -1332,9 +1337,10 @@ class VastDBVectorStore(VectorStore):
     ) -> list[tuple[dict, float]]:
         """Search VastDB for similar vectors.
 
-        Primary path: one Query Engine (ADBC) query, joined to the SDK
-        transaction. Fallback: in-memory scan with the resolved metric.
-        Subclasses can override this hook to customise search behaviour.
+        Primary path: one Query Engine (ADBC) query, joined to *tx* when given,
+        otherwise on the cached autocommit connection. Fallback: in-memory scan
+        with the resolved metric. Subclasses can override this hook to
+        customise search behaviour.
 
         Args:
             query_vector: The query embedding vector.
@@ -1342,7 +1348,7 @@ class VastDBVectorStore(VectorStore):
             predicate: Optional ibis deferred predicate used for both the ADBC
                 SQL WHERE clause (converted via ``predicate_to_sql_where``) and
                 the in-memory fallback scan (passed directly to the VastDB SDK).
-            tx: Optional transaction for reuse by subclasses.
+            tx: Optional transaction; the ADBC query joins it and sees its writes.
             **kwargs: Additional keyword arguments forwarded to
                 ``_do_vector_search_adbc`` and ``_build_adbc_where_clause``.
 
@@ -1350,23 +1356,21 @@ class VastDBVectorStore(VectorStore):
             List of (row_dict, distance_score) tuples.
         """
         columns = self._select_columns()
-        with self._ensure_tx(tx) as active_tx:
-            self._get_table(active_tx)  # loads vector index metadata once
-            return self._do_vector_search(
-                active_tx, query_vector, k, columns, predicate,
-                **kwargs,
-            )
+        if not self._metadata_loaded:
+            with self._ensure_tx(tx) as active_tx:
+                self._get_table(active_tx)  # loads vector index metadata once
+        return self._do_vector_search(tx, query_vector, k, columns, predicate, **kwargs)
 
     def _do_vector_search(
         self,
-        tx: Transaction,
+        tx: Transaction | None,
         query_vector: list[float],
         k: int,
         columns: list[str],
         predicate: ibis.Expr | None,
         **kwargs: Any,
     ) -> list[tuple[dict, float]]:
-        """Execute the vector search within a transaction.
+        """Execute the vector search, joined to *tx* when given.
 
         Uses Query Engine (ADBC) SQL when configured on VAST 5.4+ (or an unknown
         version). Falls back to
@@ -1374,7 +1378,8 @@ class VastDBVectorStore(VectorStore):
         ``VASTDB_ALLOW_FALLBACK`` env var is set to a truthy value.
 
         Args:
-            tx: An active transaction.
+            tx: Optional active transaction. ADBC joins it; without it ADBC uses
+                the cached autocommit connection and the fallback opens one.
             query_vector: The query embedding vector.
             k: Maximum number of results.
             columns: Column names to select.
@@ -1420,7 +1425,10 @@ class VastDBVectorStore(VectorStore):
                 "Alternatively, set VASTDB_ALLOW_FALLBACK=1 for small-table "
                 "in-memory search (development/testing only)."
             )
-        return self._do_vector_search_fallback(tx, query_vector, k, columns, predicate)
+        with self._ensure_tx(tx) as active_tx:
+            return self._do_vector_search_fallback(
+                active_tx, query_vector, k, columns, predicate
+            )
 
     @contextmanager
     def _open_adbc_connection(self, **kwargs: Any):
@@ -1441,6 +1449,13 @@ class VastDBVectorStore(VectorStore):
 
         Unknown kwargs are ignored so they can be consumed by other hooks
         (e.g. ``_build_adbc_where_clause``) in the same forwarding chain.
+
+        When neither override is set, the base implementation reuses one
+        autocommit connection per store per thread; if the ``with`` body raises,
+        that connection is closed and the next call reconnects. With overrides
+        (including the ``vast.db.external_txid`` join), it opens a fresh
+        connection that is closed when the ``with`` block exits. Overrides that
+        yield a fresh connection per call keep working.
 
         Args:
             **kwargs: Keyword arguments propagated from
@@ -1468,8 +1483,26 @@ class VastDBVectorStore(VectorStore):
         if conn_kwargs:
             connect_kwargs["conn_kwargs"] = conn_kwargs
 
-        with adbc_dbapi.connect(**connect_kwargs) as conn:
-            yield conn
+        if db_overrides or conn_overrides:
+            with adbc_dbapi.connect(**connect_kwargs) as conn:
+                yield conn
+            return
+
+        local = self._adbc_local
+        if getattr(local, "stack", None) is None:
+            stack = ExitStack()
+            local.conn = stack.enter_context(
+                adbc_dbapi.connect(**connect_kwargs, autocommit=True)
+            )
+            local.stack = stack
+        try:
+            yield local.conn
+        except BaseException:
+            # Cursor state is unknown after any error: drop the connection.
+            stack, local.stack, local.conn = local.stack, None, None
+            with suppress(Exception):
+                stack.close()
+            raise
 
     def _build_adbc_where_clause(
         self, predicate: ibis.Expr | None, **kwargs: Any
@@ -1550,7 +1583,7 @@ class VastDBVectorStore(VectorStore):
 
     def _do_vector_search_adbc(
         self,
-        tx: Transaction,
+        tx: Transaction | None,
         query_vector: list[float],
         k: int,
         predicate: ibis.Expr | None,
@@ -1559,7 +1592,7 @@ class VastDBVectorStore(VectorStore):
         """Fetch ranked document columns and distance in one ADBC query.
 
         Args:
-            tx: Active SDK transaction; the ADBC read joins it via
+            tx: Optional SDK transaction; when given, the ADBC read joins it via
                 ``vast.db.external_txid`` so it sees the transaction's own writes.
             query_vector: The query embedding vector.
             k: Maximum number of results.
@@ -1582,13 +1615,12 @@ class VastDBVectorStore(VectorStore):
             f"FROM {self._adbc_table_path()} {where_clause} "
             f"ORDER BY {alias} LIMIT {k}"
         )
-        conn_overrides = {
-            _ADBC_TXID_PROPERTY: str(tx.active_txid),
-            **(kwargs.get("adbc_conn_kwargs_overrides") or {}),
-        }
-        with self._open_adbc_connection(
-            **{**kwargs, "adbc_conn_kwargs_overrides": conn_overrides}
-        ) as conn:
+        if tx is not None:
+            kwargs = {**kwargs, "adbc_conn_kwargs_overrides": {
+                _ADBC_TXID_PROPERTY: str(tx.active_txid),
+                **(kwargs.get("adbc_conn_kwargs_overrides") or {}),
+            }}
+        with self._open_adbc_connection(**kwargs) as conn:
             with conn.cursor() as cursor:
                 cursor.execute(query)
                 rows = cursor.fetch_arrow_table().to_pylist()
