@@ -3,12 +3,12 @@
 
 # Prevent duplicate pipelines: run on MR events and non-MR pushes to the
 # default branch only. Tag pushes trigger the publish job provided by the
-# devops CI template (devops/ci-templates: templates/external-repo.gitlab-ci.yml).
+# shared CI template configured in project variables.
 
 include:
-  - project: 'devops/ci-templates'
+  - project: '$VASTDB_CI_TEMPLATE_PROJECT'
     ref: 'main'
-    file: 'templates/external-repo.gitlab-ci.yml'
+    file: '$VASTDB_CI_TEMPLATE_FILE'
 
 # Keep the included security scan on the existing AWS builder pool.
 trufflehog-scan:
@@ -91,6 +91,7 @@ unit-test:
 # -- Integration tests: real VAST cluster --
 integration-test:
   stage: integration-test
+  timeout: 20m
   image: ghcr.io/astral-sh/uv:${UV_VERSION}-python${PYTHON_VERSION}-${BASE_LAYER}
   tags:
     - v141-k8s
@@ -116,7 +117,11 @@ integration-test:
       : "${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required}"
       : "${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required}"
       : "${VASTDB_BUCKET:?VASTDB_BUCKET is required}"
+      : "${VASTDB_ADBC_ENDPOINT:?VASTDB_ADBC_ENDPOINT is required}"
+      export VASTDB_ADBC_DRIVER_PATH="$CI_PROJECT_DIR/.adbc/libadbc_driver_vastdb.so"
+      export VASTDB_ALLOW_FALLBACK=0
     - uv sync --locked
+    - uv run python scripts/setup_adbc_driver.py
     - uv run pytest tests/integration_tests/ -v -rs --log-cli-level=WARNING --junitxml=report.xml
   after_script:
     - uv cache prune --ci
@@ -124,9 +129,12 @@ integration-test:
     when: always
     reports:
       junit: report.xml
-  # REST-backed tests use fallback search unless both ADBC variables are configured.
+  # Native ADBC is required for the synchronous suite; fallback is disabled.
   # Required CI/CD variables (Settings → CI/CD → Variables):
-  #   AWS_S3_ENDPOINT_URL   — direct cluster URL, e.g. "https://172.26.141.1:443"
-  #   AWS_ACCESS_KEY_ID     — v141 S3-style access key (mark as Masked)
-  #   AWS_SECRET_ACCESS_KEY — v141 S3-style secret key (mark as Masked)
-  #   VASTDB_BUCKET         — bucket name, e.g. "vector-store-test-db"
+  #   VASTDB_CI_TEMPLATE_PROJECT — GitLab project containing the shared CI template
+  #   VASTDB_CI_TEMPLATE_FILE    — shared CI template path in that project
+  #   VASTDB_ADBC_ENDPOINT       — Query Engine URL, e.g. "http://<host>:<port>"
+  #   AWS_S3_ENDPOINT_URL        — REST URL, e.g. "https://<host>:<port>"
+  #   AWS_ACCESS_KEY_ID          — S3-style access key (mark as Masked)
+  #   AWS_SECRET_ACCESS_KEY      — S3-style secret key (mark as Masked)
+  #   VASTDB_BUCKET              — bucket name, e.g. "<bucket>"

@@ -3,6 +3,11 @@ version: '3'
 dotenv: ['.env']
 
 tasks:
+  adbc:setup:
+    desc: Download and verify Linux x86_64 ADBC driver (requires VASTDB_ADBC_DRIVER_PATH)
+    cmds:
+      - uv run python scripts/setup_adbc_driver.py
+
   test:integration:
     desc: Run integration tests against the live VAST cluster (reads creds from .env)
     cmds:

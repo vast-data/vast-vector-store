@@ -1,8 +1,7 @@
 """Convert ibis deferred predicates to SQL WHERE fragments.
 
 # TODO: Replace this hand-rolled ibis AST walker with the upstream VastDB
-# SQLAlchemy dialect once it is available:
-# https://git.vastdata.com/genai/sqlalchemy-vastdb
+# SQLAlchemy dialect once it is available.
 #
 # That dialect compiles ibis expressions through SQLAlchemy's standard
 # compilation path, which is more robust and covers the full ibis expression
