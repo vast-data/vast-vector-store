@@ -1450,8 +1450,9 @@ class VastDBVectorStore(VectorStore):
         Unknown kwargs are ignored so they can be consumed by other hooks
         (e.g. ``_build_adbc_where_clause``) in the same forwarding chain.
 
-        When neither override is set, the base implementation reuses one
-        autocommit connection per store per thread; if the ``with`` body raises,
+        With no overrides or configured external transaction ID, the base
+        implementation reuses one autocommit connection per store per thread;
+        if the ``with`` body raises,
         that connection is closed and the next call reconnects. With overrides
         (including the ``vast.db.external_txid`` join), it opens a fresh
         connection that is closed when the ``with`` block exits. Overrides that
@@ -1483,7 +1484,7 @@ class VastDBVectorStore(VectorStore):
         if conn_kwargs:
             connect_kwargs["conn_kwargs"] = conn_kwargs
 
-        if db_overrides or conn_overrides:
+        if db_overrides or conn_overrides or _ADBC_TXID_PROPERTY in conn_kwargs:
             with adbc_dbapi.connect(**connect_kwargs) as conn:
                 yield conn
             return

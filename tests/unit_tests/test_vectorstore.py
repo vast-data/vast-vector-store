@@ -968,6 +968,20 @@ def test_adbc_search_with_loaded_metadata_opens_no_sdk_transaction(
     dbapi.connect.assert_called_once()
 
 
+def test_adbc_static_external_txid_uses_dedicated_connection(adbc_vectorstore):
+    adbc_vectorstore._adbc_conn_kwargs = {"vast.db.external_txid": "123"}
+    dbapi = _adbc_dbapi_mock()
+    with patch("langchain_vastdb.vectorstores._get_adbc_dbapi", return_value=dbapi):
+        adbc_vectorstore._get_by_ids(["a"])
+        adbc_vectorstore.similarity_search_by_vector([0.1, 0.2, 0.3])
+    assert dbapi.connect.call_count == 2
+    for call, cm in zip(dbapi.connect.call_args_list, dbapi.cms):
+        assert call.kwargs["conn_kwargs"] == {"vast.db.external_txid": "123"}
+        assert "autocommit" not in call.kwargs
+        cm.__exit__.assert_called_once()
+    assert getattr(adbc_vectorstore._adbc_local, "conn", None) is None
+
+
 def test_adbc_caller_tx_uses_dedicated_joined_connection(
     adbc_vectorstore, mock_session, mock_transaction
 ):

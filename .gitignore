@@ -5,6 +5,7 @@
 .DS_Store
 
 # Dev tools
+.adbc/
 .benchmarks/
 .cadence/
 .uv-cache/
